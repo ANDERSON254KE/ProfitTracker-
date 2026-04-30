@@ -48,12 +48,18 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'profit_tracker_pro.wsgi.application'
 
+import dj_database_url
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'libsql.db.backends.sqlite3',
-        'NAME': os.environ.get('TURSO_DATABASE_URL'),
-    }
+    'default': dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=600,
+    )
 }
+
+# When on Vercel, ensure the engine is explicitly PostgreSQL if we have a URL
+if os.environ.get('DATABASE_URL'):
+    DATABASES['default']['ENGINE'] = 'django.db.backends.postgresql'
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
