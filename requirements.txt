@@ -4,7 +4,8 @@ django-bootstrap5==26.2
 pandas==3.0.1
 openpyxl==3.1.5
 RapidFuzz==3.14.3
-django-libsql==0.0.14
+psycopg2-binary==2.9.10
+dj-database-url==2.3.0
 gunicorn==23.0.0
 python-dotenv==1.0.1
 colorama==0.4.6
