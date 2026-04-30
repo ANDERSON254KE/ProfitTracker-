@@ -1,6 +1,7 @@
 asgiref==3.11.1
 Django==6.0.3
 django-bootstrap5==26.2
+django-jazzmin==3.0.1
 pandas==3.0.1
 openpyxl==3.1.5
 RapidFuzz==3.14.3
