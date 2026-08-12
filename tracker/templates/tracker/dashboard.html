@@ -17,25 +17,36 @@
     <nav class="navbar navbar-dark bg-dark mb-4 sticky-top">
         <div class="container">
             <a class="navbar-brand" href="/">🚀 PROFIT TRACKER PRO</a>
+            <div class="d-flex gap-2">
+                <a href="{% url 'daily_sales_report' %}" class="btn btn-info btn-sm">📊 Report</a>
+                <a href="{% url 'daily_sales' %}" class="btn btn-success btn-sm">📝 Daily Sales</a>
+            </div>
         </div>
     </nav>
 
     <div class="container-fluid container-md">
         <!-- Top Statistics -->
         <div class="row g-3 mb-2">
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-sm-6 col-lg-3">
                 <div class="card stat-card p-4 h-100">
-                    <h6 class="text-uppercase opacity-75">Total Net Profit</h6>
-                    <h2 class="display-6 fw-bold">KSh {{ total_profit|floatformat:2 }}</h2>
+                    <h6 class="text-uppercase opacity-75">Today's Profit</h6>
+                    <h2 class="display-6 fw-bold">KSh {{ today_profit|floatformat:2 }}</h2>
+                    <small class="opacity-75">({{ today_units|floatformat:2 }} units)</small>
                 </div>
             </div>
-            <div class="col-12 col-sm-6 col-md-4">
+            <div class="col-12 col-sm-6 col-lg-3">
+                <div class="card p-4 h-100">
+                    <h6 class="text-uppercase text-muted">Total Net Profit</h6>
+                    <h2 class="fw-bold text-primary">KSh {{ total_profit|floatformat:2 }}</h2>
+                </div>
+            </div>
+            <div class="col-12 col-sm-6 col-lg-3">
                 <div class="card p-4 h-100">
                     <h6 class="text-uppercase text-muted">Total Units Sold</h6>
-                    <h2 class="fw-bold text-primary">{{ total_used }} Units</h2>
+                    <h2 class="fw-bold text-primary">{{ total_used|floatformat:2 }}</h2>
                 </div>
             </div>
-            <div class="col-12 col-sm-6 col-md-4">
+            <div class="col-12 col-sm-6 col-lg-3">
                 <div class="card p-4 h-100 d-flex justify-content-center">
                     <a href="/admin" class="btn btn-dark w-100 py-2">⚙️ Admin Panel</a>
                 </div>

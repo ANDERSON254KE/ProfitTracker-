@@ -45,3 +45,28 @@ class Transaction(models.Model):
 
     class Meta:
         ordering = ['-date', '-created_at']
+
+SHOP_CHOICES = [
+    ('Fig Tree', 'Fig Tree'),
+    ('Empire Shop', 'Empire Shop'),
+    ('Emirates', 'Emirates'),
+    ('Small City', 'Small City'),
+]
+
+class DailySale(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='daily_sales')
+    shop = models.CharField("Shop", max_length=50, choices=SHOP_CHOICES, blank=True, default='')
+    quantity_sold = models.DecimalField("Amount Sold", max_digits=10, decimal_places=2, default=0)
+    sell_price = models.DecimalField("Selling Price Used", max_digits=10, decimal_places=2)
+    cost_price = models.DecimalField("Buying Price Used", max_digits=10, decimal_places=2, null=True, blank=True)
+    profit = models.DecimalField("Profit Earned", max_digits=10, decimal_places=2, default=0)
+    date = models.DateField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        cost = self.cost_price if self.cost_price is not None else self.product.cost_price
+        self.profit = (self.sell_price - cost) * self.quantity_sold
+        super().save(*args, **kwargs)
+
+    class Meta:
+        ordering = ['-date', '-created_at']

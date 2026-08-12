@@ -15,6 +15,9 @@ db.sqlite3
 .DS_Store
 Thumbs.db
 
+# Dev server logs
+*.log
+
 # IDEs
 .vscode/
 .idea/

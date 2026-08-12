@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Sales Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; }
+        .card { border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-radius: 15px; margin-bottom: 1.5rem; }
+        .shop-card { border-top: 5px solid #0d6efd; }
+        .stat-card { background: linear-gradient(135deg, #0d6efd, #0dcaf0); color: white; }
+    </style>
+</head>
+<body class="pb-5">
+    <nav class="navbar navbar-dark bg-dark mb-4 sticky-top">
+        <div class="container">
+            <a class="navbar-brand py-0" href="/">⬅ <span class="d-none d-sm-inline">Back to Dashboard</span></a>
+        </div>
+    </nav>
+
+    <div class="container container-md">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="h4 fw-bold mb-0">📊 Daily Sales Report</h2>
+            <form method="GET" action="{% url 'daily_sales_report' %}" class="d-flex gap-2 align-items-center">
+                <input type="date" name="date" class="form-control" value="{{ report_date|date:'Y-m-d' }}">
+                <button class="btn btn-outline-primary">View</button>
+            </form>
+        </div>
+
+        <div class="card p-4 stat-card text-center mb-4">
+            <h6 class="text-uppercase opacity-75">Grand Total — {{ report_date }}</h6>
+            <h1 class="display-5 fw-bold">KSh {{ grand_profit|floatformat:2 }}</h1>
+            <div class="d-flex justify-content-center gap-4 mt-2">
+                <span class="opacity-75">{{ grand_units|floatformat:2 }} units</span>
+                <a href="{% url 'daily_sales_report_export' %}?date={{ report_date|date:'Y-m-d' }}" class="text-white fw-bold">📥 Download Excel</a>
+            </div>
+        </div>
+
+        <div class="row g-3">
+            {% for shop in shops_data %}
+            <div class="col-12 col-lg-6">
+                <div class="card p-0 shop-card overflow-hidden">
+                    <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0 fw-bold">🏪 {{ shop.name }}</h6>
+                        <span class="text-success fw-bold">+KSh {{ shop.profit|floatformat:2 }} <small class="text-muted fw-normal">({{ shop.units|floatformat:2 }} units)</small></span>
+                    </div>
+                    {% if shop.sales %}
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3">Product</th>
+                                    <th class="text-end">Sold</th>
+                                    <th class="pe-3 text-end">Profit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in shop.sales %}
+                                <tr>
+                                    <td class="ps-3">{{ s.product.product_name }} <small class="text-muted">({{ s.product.category }})</small></td>
+                                    <td class="text-end">{{ s.quantity_sold }}</td>
+                                    <td class="pe-3 text-end text-success">+KSh {{ s.profit }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">No sales.</div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>

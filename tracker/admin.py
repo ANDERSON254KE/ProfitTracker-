@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Product, Transaction
+from .models import Product, Transaction, DailySale
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -10,4 +10,10 @@ class ProductAdmin(admin.ModelAdmin):
 class TransactionAdmin(admin.ModelAdmin):
     list_display = ('product', 'type', 'quantity', 'profit', 'date')
     list_filter = ('type', 'date')
+    search_fields = ('product__product_name',)
+
+@admin.register(DailySale)
+class DailySaleAdmin(admin.ModelAdmin):
+    list_display = ('product', 'shop', 'quantity_sold', 'sell_price', 'cost_price', 'profit', 'date')
+    list_filter = ('date', 'shop')
     search_fields = ('product__product_name',)
