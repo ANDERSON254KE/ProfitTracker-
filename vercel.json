@@ -1,12 +1,7 @@
 {
-  "builds": [
-    {
-      "src": "profit_tracker_pro/wsgi.py",
-      "use": "@vercel/python"
-    }
-  ],
   "functions": {
     "profit_tracker_pro/wsgi.py": {
+      "runtime": "@vercel/python",
       "maxConcurrency": 8
     }
   },
