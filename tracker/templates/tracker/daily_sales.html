@@ -8,65 +8,23 @@
     <style>
         body { background-color: #f0f2f5; }
         .card { border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-radius: 15px; }
-        .prompt-card { border-top: 5px solid #0d6efd; max-width: 520px; margin: 0 auto; }
-        .progress { height: 8px; }
+        .sticky-head th { position: sticky; top: 0; background: #f8f9fa; z-index: 1; }
     </style>
 </head>
 <body class="pb-5">
     <nav class="navbar navbar-dark bg-dark mb-4 sticky-top">
         <div class="container">
             <a class="navbar-brand py-0" href="/">⬅ <span class="d-none d-sm-inline">Back to Dashboard</span></a>
+            {% if not pick_shop %}
+            <a class="navbar-brand py-0 text-info" href="{% url 'daily_sales' %}?reset=1">Change Shop</a>
+            {% endif %}
         </div>
     </nav>
 
     <div class="container container-md">
-        {% if done %}
-        <!-- Summary / Done -->
-        <div class="card p-4 mb-4 text-center">
-            <h3 class="mb-1">✅ Entry Complete</h3>
-            <p class="text-muted mb-0">{{ today_date|default:"" }} • {{ shop }} • Today's total:</p>
-            <h2 class="display-6 fw-bold"><span class="text-success">KSh {{ total_profit|floatformat:2 }}</span> <small class="text-muted fs-5">({{ total_units|floatformat:2 }} units)</small></h2>
-        </div>
-
-        <div class="card p-0 overflow-hidden">
-            <div class="p-4 border-bottom">
-                <h5 class="mb-0 fw-bold">Today's Sales — {{ shop }}</h5>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th class="ps-4">Product</th>
-                            <th>Selling</th>
-                            <th class="text-end">Amount Sold</th>
-                            <th class="pe-4 text-end">Profit</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for s in sales %}
-                        <tr>
-                            <td class="ps-4">{{ s.product.product_name }} <small class="text-muted">({{ s.product.category }})</small></td>
-                            <td>KSh {{ s.sell_price }}</td>
-                            <td class="text-end">{{ s.quantity_sold }}</td>
-                            <td class="pe-4 text-end text-success fw-bold">+KSh {{ s.profit }}</td>
-                        </tr>
-                        {% empty %}
-                        <tr><td colspan="4" class="text-center py-4 text-muted">No sales recorded.</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="d-flex gap-2 mt-4">
-            <a href="{% url 'daily_sales' %}?step={{ manual_step }}" class="btn btn-outline-primary btn-lg">➕ Custom Entry</a>
-            <a href="{% url 'daily_sales_export' %}" class="btn btn-success btn-lg flex-fill">📥 Download Excel</a>
-            <a href="{% url 'daily_sales_report' %}" class="btn btn-outline-info btn-lg">📊 All Shops Report</a>
-            <a href="{% url 'daily_sales' %}?reset=1" class="btn btn-outline-dark btn-lg">Start New</a>
-        </div>
-        {% elif pick_shop %}
+        {% if pick_shop %}
         <!-- Shop picker -->
-        <div class="card p-4 prompt-card text-center">
+        <div class="card p-4 prompt-card text-center mx-auto" style="max-width:520px;">
             <h3 class="h4 fw-bold mb-1">🏪 Which shop?</h3>
             <p class="text-muted mb-4">Choose the shop for today's sales entry.</p>
             <form method="POST" action="{% url 'daily_sales' %}">
@@ -80,93 +38,157 @@
             </form>
         </div>
         {% else %}
-        <!-- Prompt / Manual entry -->
-        <p class="text-center text-muted small mb-2">Entering for: <span class="badge bg-info text-dark">{{ shop }}</span></p>
-        <div class="progress mb-3">
-            <div class="progress-bar" style="width: {% widthratio step 1 total %}%"></div>
-        </div>
-        {% if manual %}
-        <p class="text-center text-muted small mb-3">Optional custom entry (not in the list)</p>
-
-        <div class="card p-4 prompt-card">
-            <div class="d-flex justify-content-between align-items-start mb-3">
-                <div>
-                    <small class="text-uppercase text-muted">Manual Entry</small>
-                    <h2 class="h3 fw-bold mb-0">➕ Custom Product</h2>
-                </div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <div>
+                <h3 class="mb-0 fw-bold">Daily Sales</h3>
+                <span class="badge bg-info text-dark">{{ shop }}</span>
             </div>
-
-            <form method="POST" action="{% url 'daily_sales' %}">
-                {% csrf_token %}
-                <input type="hidden" name="entry_type" value="manual">
-                <input type="hidden" name="step" value="{{ step }}">
-                <div class="mb-3">
-                    <label class="form-label small text-muted">Product name</label>
-                    <input type="text" name="product_name" class="form-control form-control-lg" placeholder="e.g. Chocolate Bar" autofocus autocomplete="off">
-                </div>
-                <div class="row g-3">
-                    <div class="col-6">
-                        <div class="mb-3">
-                            <label class="form-label small text-muted">Buying price (KSh)</label>
-                            <input type="number" name="buying_price" min="0" step="0.01" class="form-control">
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="mb-3">
-                            <label class="form-label small text-muted">Selling price (KSh)</label>
-                            <input type="number" name="selling_price" min="0" step="0.01" class="form-control">
-                        </div>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label small text-muted">Amount sold</label>
-                    <input type="number" name="quantity" min="0" step="0.01" class="form-control form-control-lg" placeholder="0">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label small text-muted">Date</label>
-                    <input type="date" name="sale_date" class="form-control" value="{{ today_date }}">
-                </div>
-                <div class="d-flex gap-2">
-                    <a href="{% url 'daily_sales' %}?step={{ step|add:-1 }}" class="btn btn-outline-secondary btn-lg">⬅ Back</a>
-                    <button type="submit" class="btn btn-primary btn-lg flex-fill">Save & Finish ➡</button>
-                </div>
-            </form>
         </div>
-        {% else %}
-        <p class="text-center text-muted small mb-3">Product {{ step|add:1 }} of {{ total }}</p>
 
-        <div class="card p-4 prompt-card">
-            <div class="d-flex justify-content-between align-items-start mb-3">
-                <div>
-                    <small class="text-uppercase text-muted">{{ product.category }}</small>
-                    <h2 class="h3 fw-bold mb-0">{{ product.product_name }}</h2>
-                </div>
-                <span class="badge bg-success fs-6">KSh {{ product.selling_price }}</span>
-            </div>
-
-            <form method="POST" action="{% url 'daily_sales' %}">
-                {% csrf_token %}
-                <input type="hidden" name="product_id" value="{{ product.id }}">
-                <input type="hidden" name="step" value="{{ step }}">
-                <div class="mb-3">
-                    <label class="form-label small text-muted">Amount sold today</label>
-                    <input type="number" name="quantity" min="0" step="0.01" class="form-control form-control-lg"
-                           placeholder="0" value="{{ prior_qty }}" autofocus autocomplete="off">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label small text-muted">Date</label>
-                    <input type="date" name="sale_date" class="form-control" value="{{ today_date }}">
-                </div>
-                <div class="d-flex gap-2">
-                    {% if step > 0 %}
-                    <a href="{% url 'daily_sales' %}?step={{ step|add:-1 }}" class="btn btn-outline-secondary btn-lg">⬅ Back</a>
-                    {% endif %}
-                    <button type="submit" class="btn btn-primary btn-lg flex-fill">Save & Next ➡</button>
-                </div>
-            </form>
-        </div>
+        {% if saved %}
+        <div class="alert alert-success py-2">✅ Saved. The system calculated profit for each item.</div>
         {% endif %}
+
+        <!-- Filters (GET, reloads prefill) -->
+        <form method="get" class="row g-2 align-items-end mb-3">
+            <div class="col-auto">
+                <label class="form-label small text-muted mb-1">Date</label>
+                <input type="date" name="date" class="form-control" value="{{ sale_date|date:'Y-m-d' }}">
+            </div>
+            <div class="col-auto">
+                <label class="form-label small text-muted mb-1">Category</label>
+                <select name="cat" class="form-select" onchange="this.form.submit()">
+                    <option value="">All</option>
+                    {% for c in categories %}
+                    <option value="{{ c }}" {% if c == cat %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-outline-secondary">Load</button>
+            </div>
+        </form>
+
+        <!-- Bulk entry -->
+        <form method="POST" action="{% url 'daily_sales' %}">
+            {% csrf_token %}
+            <input type="hidden" name="entry_type" value="bulk">
+            <input type="hidden" name="sale_date" value="{{ sale_date|date:'Y-m-d' }}">
+
+            <div class="card p-0 overflow-hidden mb-4">
+                <div class="table-responsive" style="max-height: 60vh; overflow:auto;">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light sticky-head">
+                            <tr>
+                                <th class="ps-3">#</th>
+                                <th>Product</th>
+                                <th class="text-end">Sell</th>
+                                <th class="text-end">Cost</th>
+                                <th class="pe-3 text-end" style="width:160px;">Amount Sold</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for product, qty in rows %}
+                            <tr>
+                                <td class="ps-3 text-muted">{{ forloop.counter }}</td>
+                                <td>{{ product.product_name }} <small class="text-muted">({{ product.category }})</small></td>
+                                <td class="text-end">{{ product.selling_price }}</td>
+                                <td class="text-end">{{ product.cost_price }}</td>
+                                <td class="pe-3">
+                                    <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
+                                           class="form-control form-control-sm text-end" value="{{ qty }}" placeholder="0">
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center py-4 text-muted">No products to show.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Custom items -->
+            <div class="card p-3 mb-4">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0 fw-bold">➕ Custom items (not in the list)</h6>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="addManual">+ Add item</button>
+                </div>
+                <div id="manualRows"></div>
+                <p class="text-muted small mb-0">Tip: type a previously added item name and its buying/selling prices fill in automatically.</p>
+            </div>
+
+            <div class="d-flex gap-2 mb-4">
+                <button type="submit" class="btn btn-primary btn-lg flex-fill">💾 Save All & Calculate</button>
+                <a href="{% url 'daily_sales_report' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-outline-info btn-lg">📊 Report</a>
+                <a href="{% url 'daily_sales_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📥 Excel</a>
+            </div>
+        </form>
         {% endif %}
     </div>
+
+    <template id="manualTemplate">
+        <div class="row g-2 mb-2 manual-row align-items-end">
+            <div class="col">
+                <input type="text" name="manual_name" class="form-control form-control-sm" placeholder="Product name" autocomplete="off">
+            </div>
+            <div class="col-2">
+                <input type="number" name="manual_buy" min="0" step="0.01" class="form-control form-control-sm" placeholder="Buy">
+            </div>
+            <div class="col-2">
+                <input type="number" name="manual_sell" min="0" step="0.01" class="form-control form-control-sm" placeholder="Sell">
+            </div>
+            <div class="col-2">
+                <input type="number" name="manual_qty" min="0" step="0.01" class="form-control form-control-sm" placeholder="Qty">
+            </div>
+            <div class="col-auto">
+                <button type="button" class="btn btn-sm btn-outline-danger rmManual">✕</button>
+            </div>
+        </div>
+    </template>
+
+    <script>
+    (function () {
+        var container = document.getElementById('manualRows');
+        var tpl = document.getElementById('manualTemplate');
+        var addBtn = document.getElementById('addManual');
+        if (!container || !addBtn) return;
+
+        function autofillRow(row) {
+            var nameInput = row.querySelector('input[name="manual_name"]');
+            var buyInput = row.querySelector('input[name="manual_buy"]');
+            var sellInput = row.querySelector('input[name="manual_sell"]');
+            if (!nameInput) return;
+            var timer;
+            nameInput.addEventListener('input', function () {
+                clearTimeout(timer);
+                var name = nameInput.value.trim();
+                if (name.length < 2) return;
+                timer = setTimeout(function () {
+                    fetch('{% url "daily_sales_product_lookup" %}?name=' + encodeURIComponent(name))
+                        .then(function (r) { return r.json(); })
+                        .then(function (d) {
+                            if (d.found) {
+                                if (buyInput.value === '') buyInput.value = d.cost_price;
+                                if (sellInput.value === '') sellInput.value = d.selling_price;
+                            }
+                        });
+                }, 400);
+            });
+        }
+
+        function addRow() {
+            var node = tpl.content.cloneNode(true);
+            var row = node.querySelector('.manual-row');
+            autofillRow(row);
+            row.querySelector('.rmManual').addEventListener('click', function () {
+                row.remove();
+            });
+            container.appendChild(node);
+        }
+
+        addBtn.addEventListener('click', addRow);
+        addRow();
+    })();
+    </script>
 </body>
 </html>

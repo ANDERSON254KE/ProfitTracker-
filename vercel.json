@@ -5,6 +5,11 @@
       "use": "@vercel/python"
     }
   ],
+  "functions": {
+    "profit_tracker_pro/wsgi.py": {
+      "maxConcurrency": 8
+    }
+  },
   "routes": [
     {
       "src": "/(.*)",

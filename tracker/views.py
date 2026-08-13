@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.db.models import Sum, Q
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
@@ -123,23 +123,28 @@ def _parse_decimal(value):
         return None
 
 def _sale_products():
+    # Ordered by id so the list follows the stock-sheet import order.
     return list(
         Product.objects.filter(category__in=SALES_CATEGORIES, cost_price__gt=0)
-        .order_by('category', 'product_name')
+        .order_by('id')
     )
 
+def daily_sales_product_lookup(request):
+    name = request.GET.get('name', '').strip()
+    product = Product.objects.filter(product_name__iexact=name).first()
+    if product is not None:
+        return JsonResponse({
+            'found': True,
+            'cost_price': str(product.cost_price),
+            'selling_price': str(product.selling_price),
+        })
+    return JsonResponse({'found': False})
+
+
 def daily_sales(request):
-    products = _sale_products()
-    entries = request.session.get('daily_sales', {})
     shop = request.session.get('daily_sales_shop', '')
-    if entries:
-        ids = [e['sale_id'] for e in entries.values() if e.get('sale_id')]
-        alive = set(DailySale.objects.filter(pk__in=ids).values_list('pk', flat=True))
-        entries = {k: e for k, e in entries.items() if not e.get('sale_id') or e['sale_id'] in alive}
-        request.session['daily_sales'] = entries
 
     if request.GET.get('reset'):
-        request.session['daily_sales'] = {}
         request.session['daily_sales_shop'] = ''
         return redirect(reverse('daily_sales'))
 
@@ -150,134 +155,111 @@ def daily_sales(request):
                 request.session['daily_sales_shop'] = selected
             return redirect(reverse('daily_sales'))
 
-        if request.POST.get('entry_type') == 'manual':
-            name = request.POST.get('product_name', '').strip()
-            sale_date = _parse_date(request.POST.get('sale_date'))
-            qty = _parse_decimal(request.POST.get('quantity'))
-            sell = _parse_decimal(request.POST.get('selling_price'))
-            buy = _parse_decimal(request.POST.get('buying_price'))
-            step = int(request.POST.get('step', 0))
-            if name and qty and qty > 0 and sell and sell > 0:
-                product = Product.objects.filter(product_name=name).first()
-                if product is None:
-                    product = Product.objects.create(
-                        product_name=name,
-                        cost_price=buy if buy is not None else Decimal('0.00'),
-                        selling_price=sell,
-                        category='MANUAL',
-                    )
-                key = str(product.pk)
-                existing = entries.get(key)
-                sale = existing.get('sale_id') if existing else None
-                if sale:
-                    sale = DailySale.objects.filter(pk=sale).first()
-                if sale is not None:
-                    sale.quantity_sold = qty
-                    sale.sell_price = sell
-                    sale.cost_price = buy
-                    sale.shop = shop
-                    sale.date = sale_date
-                    sale.save()
-                else:
-                    sale = DailySale.objects.create(
+        if request.POST.get('entry_type') == 'bulk':
+            shop = request.session.get('daily_sales_shop', '')
+            if shop not in SHOPS:
+                return redirect(reverse('daily_sales'))
+            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
+
+            existing = {
+                s.product_id: s for s in
+                DailySale.objects.filter(shop=shop, date=sale_date)
+            }
+
+            for product in _sale_products():
+                qty = _parse_decimal(request.POST.get('qty_%d' % product.pk))
+                sale = existing.get(product.pk)
+                if qty and qty > 0:
+                    if sale:
+                        sale.quantity_sold = qty
+                        sale.sell_price = product.selling_price
+                        sale.cost_price = product.cost_price
+                        sale.save()
+                    else:
+                        DailySale.objects.create(
+                            product=product,
+                            shop=shop,
+                            quantity_sold=qty,
+                            sell_price=product.selling_price,
+                            cost_price=product.cost_price,
+                            date=sale_date,
+                        )
+                elif sale:
+                    sale.delete()
+
+            names = request.POST.getlist('manual_name')
+            buys = request.POST.getlist('manual_buy')
+            sells = request.POST.getlist('manual_sell')
+            qtys = request.POST.getlist('manual_qty')
+            for i in range(len(names)):
+                name = names[i].strip()
+                qty = _parse_decimal(qtys[i]) if i < len(qtys) else None
+                sell = _parse_decimal(sells[i]) if i < len(sells) else None
+                buy = _parse_decimal(buys[i]) if i < len(buys) else None
+                if name and qty and qty > 0 and sell and sell > 0:
+                    product = Product.objects.filter(product_name__iexact=name).first()
+                    if product is None:
+                        product = Product.objects.create(
+                            product_name=name,
+                            cost_price=buy if buy is not None else Decimal('0.00'),
+                            selling_price=sell,
+                            category='MANUAL',
+                        )
+                    else:
+                        if buy is not None:
+                            product.cost_price = buy
+                        product.selling_price = sell
+                        product.save()
+                    sale, created = DailySale.objects.get_or_create(
                         product=product,
                         shop=shop,
-                        quantity_sold=qty,
-                        sell_price=sell,
-                        cost_price=buy,
                         date=sale_date,
+                        defaults={
+                            'quantity_sold': qty,
+                            'sell_price': sell,
+                            'cost_price': product.cost_price,
+                        },
                     )
-                entries[key] = {'quantity_sold': str(qty), 'sale_id': sale.pk, 'manual': True}
-            request.session['daily_sales'] = entries
-            return redirect(f"{reverse('daily_sales')}?step={step + 1}")
+                    if not created:
+                        sale.quantity_sold = qty
+                        sale.sell_price = sell
+                        sale.cost_price = product.cost_price
+                        sale.save()
 
-        pid = request.POST.get('product_id')
-        product = get_object_or_404(Product, pk=pid)
-        qty_raw = request.POST.get('quantity', '').strip()
-        try:
-            qty = Decimal(qty_raw)
-        except (InvalidOperation, TypeError, ValueError):
-            qty = Decimal('0.00')
-        sale_date = _parse_date(request.POST.get('sale_date'))
-        key = str(product.pk)
-
-        if qty > 0:
-            existing = entries.get(key)
-            sale = existing.get('sale_id') if existing else None
-            sale = DailySale.objects.filter(pk=sale).first() if sale else None
-            if sale is not None:
-                sale.quantity_sold = qty
-                sale.sell_price = product.selling_price
-                sale.shop = shop
-                sale.date = sale_date
-                sale.save()
-            else:
-                sale = DailySale.objects.create(
-                    product=product,
-                    shop=shop,
-                    quantity_sold=qty,
-                    sell_price=product.selling_price,
-                    date=sale_date,
-                )
-            entries[key] = {'quantity_sold': str(qty), 'sale_id': sale.pk}
-        else:
-            existing = entries.pop(key, None)
-            if existing and existing.get('sale_id'):
-                DailySale.objects.filter(pk=existing['sale_id']).delete()
-        request.session['daily_sales'] = entries
-
-        step = int(request.POST.get('step', 0)) + 1
-        return redirect(f"{reverse('daily_sales')}?step={step}")
+            return redirect(f"{reverse('daily_sales')}?saved=1&date={sale_date}")
 
     if shop not in SHOPS:
         return render(request, 'tracker/daily_sales.html', {
             'pick_shop': True,
             'shops': SHOPS,
-            'done': False,
         })
 
-    step = max(0, int(request.GET.get('step', 0)))
-    if step < len(products):
-        product = products[step]
-        prior = entries.get(str(product.pk), {})
-        return render(request, 'tracker/daily_sales.html', {
-            'product': product,
-            'shop': shop,
-            'step': step,
-            'total': len(products),
-            'prior_qty': prior.get('quantity_sold', ''),
-            'today_date': date.today().strftime('%Y-%m-%d'),
-            'done': False,
-        })
+    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    cat = request.GET.get('cat', '')
+    products = _sale_products()
+    if cat:
+        products = [p for p in products if p.category == cat]
 
-    if step == len(products):
-        return render(request, 'tracker/daily_sales.html', {
-            'manual': True,
-            'shop': shop,
-            'step': step,
-            'total': len(products) + 1,
-            'today_date': date.today().strftime('%Y-%m-%d'),
-            'done': False,
-        })
+    existing = {
+        s.product_id: s.quantity_sold for s in
+        DailySale.objects.filter(shop=shop, date=sale_date)
+    }
+    rows = [(p, existing.get(p.pk, '')) for p in products]
+    saved = request.GET.get('saved') == '1'
 
-    ids = [e['sale_id'] for e in entries.values() if e.get('sale_id')]
-    sales = DailySale.objects.filter(pk__in=ids)
-    total = sales.aggregate(Sum('profit'))['profit__sum'] or 0
-    total_units = sales.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or 0
     return render(request, 'tracker/daily_sales.html', {
-        'sales': sales,
         'shop': shop,
-        'total_profit': total,
-        'total_units': total_units,
-        'today_date': date.today().strftime('%Y-%m-%d'),
-        'manual_step': len(products),
-        'done': True,
+        'sale_date': sale_date,
+        'rows': rows,
+        'categories': SALES_CATEGORIES,
+        'cat': cat,
+        'saved': saved,
     })
 
 def daily_sales_export(request):
-    entries = request.session.get('daily_sales', {})
-    ids = [e['sale_id'] for e in entries.values() if e.get('sale_id')]
-    sales = DailySale.objects.filter(pk__in=ids).select_related('product')
+    shop = request.session.get('daily_sales_shop', '')
+    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    sales = DailySale.objects.filter(shop=shop, date=sale_date).select_related('product')
     rows = [{
         'Shop': s.shop or 'Unassigned',
         'Product': s.product.product_name,
@@ -309,7 +291,8 @@ def daily_sales_export(request):
         buffer.read(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-    response['Content-Disposition'] = f'attachment; filename="daily_sales_{date.today()}.xlsx"'
+    safe_shop = (shop or 'Unassigned').replace(' ', '_')
+    response['Content-Disposition'] = f'attachment; filename="daily_sales_{safe_shop}_{sale_date}.xlsx"'
     return response
 
 def daily_sales_report(request):

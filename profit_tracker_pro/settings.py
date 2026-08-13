@@ -1,7 +1,11 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = 'django-insecure-your-secret-key-here'
 ALLOWED_HOSTS = ['*']
@@ -101,10 +105,19 @@ WSGI_APPLICATION = 'profit_tracker_pro.wsgi.application'
 
 import dj_database_url
 
+# On Vercel (serverless) each invocation should NOT keep a persistent
+# connection, otherwise idle connections accumulate across containers and
+# exhaust Aiven's connection slots. A PgBouncer pool (pgbouncer=true in the
+# URL) also requires CONN_MAX_AGE=0, since the pool reuses one physical
+# connection across many logical ones and a long-lived Django connection
+# would defeat the pooling.
+_database_url = os.environ.get('DATABASE_URL', '')
+conn_max_age = 0 if (os.environ.get('VERCEL') or 'pgbouncer' in _database_url) else 600
+
 DATABASES = {
     'default': dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        conn_max_age=conn_max_age,
     )
 }
 
