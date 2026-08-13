@@ -1,10 +1,17 @@
 from django.contrib import admin
-from .models import Product, Transaction, DailySale
+from .models import Product, Transaction, DailySale, ProductShopPrice
+
+
+class ProductShopPriceInline(admin.TabularInline):
+    model = ProductShopPrice
+    extra = 0
+
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('product_name', 'shop', 'category', 'cost_price', 'selling_price')
     search_fields = ('product_name', 'shop', 'category')
+    inlines = [ProductShopPriceInline]
     show_full_result_count = False
 
 @admin.register(Transaction)

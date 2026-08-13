@@ -5,7 +5,12 @@ from django.urls import reverse
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
 import pandas as pd
-from .models import Product, Transaction, DailySale
+from .models import Product, Transaction, DailySale, ProductShopPrice
+
+
+def _shop_price_overrides(shop):
+    """Return {product_id: selling_price} for shop-specific price overrides."""
+    return {sp.product_id: sp.selling_price for sp in ProductShopPrice.objects.filter(shop=shop)}
 from datetime import date, datetime
 from decimal import Decimal
 from rapidfuzz import process, fuzz
@@ -131,12 +136,18 @@ def _sale_products():
 
 def daily_sales_product_lookup(request):
     name = request.GET.get('name', '').strip()
+    shop = request.GET.get('shop', '').strip()
     product = Product.objects.filter(product_name__iexact=name).first()
     if product is not None:
+        selling_price = product.selling_price
+        if shop in SHOPS:
+            override = ProductShopPrice.objects.filter(product=product, shop=shop).first()
+            if override:
+                selling_price = override.selling_price
         return JsonResponse({
             'found': True,
             'cost_price': str(product.cost_price),
-            'selling_price': str(product.selling_price),
+            'selling_price': str(selling_price),
         })
     return JsonResponse({'found': False})
 
@@ -165,14 +176,16 @@ def daily_sales(request):
                 s.product_id: s for s in
                 DailySale.objects.filter(shop=shop, date=sale_date)
             }
+            overrides = _shop_price_overrides(shop)
 
             for product in _sale_products():
                 qty = _parse_decimal(request.POST.get('qty_%d' % product.pk))
                 sale = existing.get(product.pk)
                 if qty and qty > 0:
+                    sell = overrides.get(product.pk, product.selling_price)
                     if sale:
                         sale.quantity_sold = qty
-                        sale.sell_price = product.selling_price
+                        sale.sell_price = sell
                         sale.cost_price = product.cost_price
                         sale.save()
                     else:
@@ -180,7 +193,7 @@ def daily_sales(request):
                             product=product,
                             shop=shop,
                             quantity_sold=qty,
-                            sell_price=product.selling_price,
+                            sell_price=sell,
                             cost_price=product.cost_price,
                             date=sale_date,
                         )
@@ -244,7 +257,8 @@ def daily_sales(request):
         s.product_id: s.quantity_sold for s in
         DailySale.objects.filter(shop=shop, date=sale_date)
     }
-    rows = [(p, existing.get(p.pk, '')) for p in products]
+    overrides = _shop_price_overrides(shop)
+    rows = [(p, existing.get(p.pk, ''), overrides.get(p.pk, p.selling_price)) for p in products]
     saved = request.GET.get('saved') == '1'
 
     return render(request, 'tracker/daily_sales.html', {

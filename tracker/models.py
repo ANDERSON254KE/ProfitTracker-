@@ -70,3 +70,17 @@ class DailySale(models.Model):
 
     class Meta:
         ordering = ['-date', '-created_at']
+
+
+class ProductShopPrice(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='shop_prices')
+    shop = models.CharField("Shop", max_length=50, choices=SHOP_CHOICES)
+    selling_price = models.DecimalField("Selling Price", max_digits=10, decimal_places=2)
+
+    class Meta:
+        unique_together = ('product', 'shop')
+        verbose_name = "Shop Price Override"
+        verbose_name_plural = "Shop Price Overrides"
+
+    def __str__(self):
+        return f"{self.product.product_name} @ {self.shop}: {self.selling_price}"

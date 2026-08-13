@@ -88,11 +88,11 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for product, qty in rows %}
+                            {% for product, qty, sell in rows %}
                             <tr>
                                 <td class="ps-3 text-muted">{{ forloop.counter }}</td>
                                 <td>{{ product.product_name }} <small class="text-muted">({{ product.category }})</small></td>
-                                <td class="text-end">{{ product.selling_price }}</td>
+                                <td class="text-end">{{ sell }}</td>
                                 <td class="text-end">{{ product.cost_price }}</td>
                                 <td class="pe-3">
                                     <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
@@ -164,7 +164,7 @@
                 var name = nameInput.value.trim();
                 if (name.length < 2) return;
                 timer = setTimeout(function () {
-                    fetch('{% url "daily_sales_product_lookup" %}?name=' + encodeURIComponent(name))
+                    fetch('{% url "daily_sales_product_lookup" %}?name=' + encodeURIComponent(name) + '&shop=' + encodeURIComponent('{{ shop }}'))
                         .then(function (r) { return r.json(); })
                         .then(function (d) {
                             if (d.found) {
