@@ -40,6 +40,12 @@ STOCK_SHEET_ORDER = [
 
 STOCK_SHEET_POSITION = {name.lower().strip(): idx for idx, name in enumerate(STOCK_SHEET_ORDER)}
 
+
+def _shop_price_overrides(shop):
+    """Return {product_id: selling_price} for shop-specific price overrides."""
+    return {sp.product_id: sp.selling_price for sp in ProductShopPrice.objects.filter(shop=shop)}
+
+
 def dashboard(request):
     query = request.GET.get('q', '').strip()
     products = Product.objects.all()
