@@ -4,19 +4,41 @@ from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
+from datetime import date, datetime
+from rapidfuzz import process, fuzz
 import pandas as pd
 from .models import Product, Transaction, DailySale, ProductShopPrice
 
-
-def _shop_price_overrides(shop):
-    """Return {product_id: selling_price} for shop-specific price overrides."""
-    return {sp.product_id: sp.selling_price for sp in ProductShopPrice.objects.filter(shop=shop)}
-from datetime import date, datetime
-from decimal import Decimal
-from rapidfuzz import process, fuzz
-
 SALES_CATEGORIES = ['250ml', '350ml', '750ml', 'soda', 'cans']
 SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
+
+STOCK_SHEET_ORDER = [
+    'Gilbeys', 'Best Whiskey', 'Blue Ice', 'V&A', 'Bond 7', 'viceroy', 'Smirnoff',
+    'Kane', 'Napoleon', 'Konyagi', 'Richot', 'Kenya King', 'Muckpit', 'Captain Morgan',
+    'Origin', 'Chrome Vodka', 'Tripple Ace', 'Kibao', 'Hunters', 'Best Gin',
+    'William Grayson', 'Dallas', 'General Meakings', 'People Vodka', 'Smart Vodka',
+    'Best Vodka', 'Chrome Gin', 'County', 'carribian', 'Trace', 'KC. Pineapple',
+    'KC. smooth', 'KC .Ginger',
+    'Jameson', 'Richot', 'Black&white', 'All seasons', 'Gilbeys', 'Smirnoff',
+    'Kibao', 'CrazyCork', 'Hunters', 'Viceroy', 'Amarula', 'VAT 69',
+    'Black label', 'Red label',
+    'Kc smooth', 'KC. Pineapple', 'Kc.Ginger', 'Kane Extra', 'V&A', 'Hunters',
+    'All seasons', 'Kenya king', 'Chrome Vodka', 'Chrome Gin', 'Origin',
+    '4th street', 'Jameson 750ml', 'William Lawsons', 'viceroy', 'Black&white',
+    'Gilbeys', 'Captain Morgan', 'Cointy', 'Smirnoff', 'Kibao', 'General Meakings',
+    'Amarula 1ltr', 'Amarula 750', 'Best Gin', 'Best Whisky', 'Red label 750',
+    'Red Label 1 ltr', 'Black Label 750ml', 'Black Label 1ltr', 'Crazy Cock',
+    'Richot', 'VAT 69',
+    'Guarana', 'Guarana Black', 'Guiness', 'Tusker', 'Tusker Malt', 'Tusker Lite',
+    'Tusker cider', 'Snapp', 'pineapple Punch', 'Faxe', 'Redbull', 'Delmonte',
+    'Balozi', 'Whitecap', 'Caprice', 'Pilsner', 'Heineken',
+    'Tusker', 'Guiness', 'Tusker cider', 'Pilsner', 'White Cap', 'Kingfisher',
+    'Soda 500ml', 'Soda 350ml', 'Soda 300ml', 'Soda 200ml', 'Soda 1.25ltrs',
+    'Soda 2ltrs', 'mInutemaid Small', 'mInutemaid Big', 'Dasani Small',
+    'Dasani Big', 'Lemonade', 'predator', 'Kiss', 'Glacier Small', 'Glacier Big',
+]
+
+STOCK_SHEET_POSITION = {name.lower().strip(): idx for idx, name in enumerate(STOCK_SHEET_ORDER)}
 
 def dashboard(request):
     query = request.GET.get('q', '').strip()
@@ -127,12 +149,17 @@ def _parse_decimal(value):
     except (InvalidOperation, TypeError, ValueError):
         return None
 
+def _stock_sheet_position(product):
+    key = product.product_name.lower().strip()
+    return STOCK_SHEET_POSITION.get(key, 9999)
+
+
 def _sale_products():
-    # Ordered by id so the list follows the stock-sheet import order.
-    return list(
+    products = list(
         Product.objects.filter(category__in=SALES_CATEGORIES, cost_price__gt=0)
-        .order_by('id')
     )
+    products.sort(key=_stock_sheet_position)
+    return products
 
 def daily_sales_product_lookup(request):
     name = request.GET.get('name', '').strip()
@@ -180,13 +207,16 @@ def daily_sales(request):
 
             for product in _sale_products():
                 qty = _parse_decimal(request.POST.get('qty_%d' % product.pk))
+                sell_price = _parse_decimal(request.POST.get('sell_%d' % product.pk))
+                cost_price = _parse_decimal(request.POST.get('cost_%d' % product.pk))
                 sale = existing.get(product.pk)
                 if qty and qty > 0:
-                    sell = overrides.get(product.pk, product.selling_price)
+                    sell = sell_price if sell_price is not None else overrides.get(product.pk, product.selling_price)
+                    cost = cost_price if cost_price is not None else product.cost_price
                     if sale:
                         sale.quantity_sold = qty
                         sale.sell_price = sell
-                        sale.cost_price = product.cost_price
+                        sale.cost_price = cost
                         sale.save()
                     else:
                         DailySale.objects.create(
@@ -194,7 +224,7 @@ def daily_sales(request):
                             shop=shop,
                             quantity_sold=qty,
                             sell_price=sell,
-                            cost_price=product.cost_price,
+                            cost_price=cost,
                             date=sale_date,
                         )
                 elif sale:
@@ -248,25 +278,35 @@ def daily_sales(request):
         })
 
     sale_date = _parse_date(request.GET.get('date')) or date.today()
-    cat = request.GET.get('cat', '')
     products = _sale_products()
-    if cat:
-        products = [p for p in products if p.category == cat]
 
     existing = {
-        s.product_id: s.quantity_sold for s in
+        s.product_id: s for s in
         DailySale.objects.filter(shop=shop, date=sale_date)
     }
     overrides = _shop_price_overrides(shop)
-    rows = [(p, existing.get(p.pk, ''), overrides.get(p.pk, p.selling_price)) for p in products]
+
+    categories_data = []
+    for cat in SALES_CATEGORIES:
+        cat_products = [p for p in products if p.category == cat]
+        if cat_products:
+            rows = []
+            for p in cat_products:
+                sale = existing.get(p.pk)
+                rows.append((
+                    p,
+                    sale.quantity_sold if sale else '',
+                    overrides.get(p.pk, p.selling_price),
+                    sale.cost_price if sale else p.cost_price,
+                ))
+            categories_data.append({'name': cat, 'rows': rows})
+
     saved = request.GET.get('saved') == '1'
 
     return render(request, 'tracker/daily_sales.html', {
         'shop': shop,
         'sale_date': sale_date,
-        'rows': rows,
-        'categories': SALES_CATEGORIES,
-        'cat': cat,
+        'categories_data': categories_data,
         'saved': saved,
     })
 

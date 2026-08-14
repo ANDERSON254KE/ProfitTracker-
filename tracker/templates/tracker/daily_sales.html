@@ -9,6 +9,12 @@
         body { background-color: #f0f2f5; }
         .card { border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-radius: 15px; }
         .sticky-head th { position: sticky; top: 0; background: #f8f9fa; z-index: 1; }
+        .category-section { margin-bottom: 1.5rem; }
+        .category-header { cursor: pointer; user-select: none; }
+        .category-header:hover { background-color: #e9ecef; }
+        .table-responsive { max-height: 70vh; overflow:auto; }
+        .price-input { width: 85px; }
+        .qty-input { width: 100px; }
     </style>
 </head>
 <body class="pb-5">
@@ -49,20 +55,11 @@
         <div class="alert alert-success py-2">✅ Saved. The system calculated profit for each item.</div>
         {% endif %}
 
-        <!-- Filters (GET, reloads prefill) -->
+        <!-- Date filter -->
         <form method="get" class="row g-2 align-items-end mb-3">
             <div class="col-auto">
                 <label class="form-label small text-muted mb-1">Date</label>
                 <input type="date" name="date" class="form-control" value="{{ sale_date|date:'Y-m-d' }}">
-            </div>
-            <div class="col-auto">
-                <label class="form-label small text-muted mb-1">Category</label>
-                <select name="cat" class="form-select" onchange="this.form.submit()">
-                    <option value="">All</option>
-                    {% for c in categories %}
-                    <option value="{{ c }}" {% if c == cat %}selected{% endif %}>{{ c }}</option>
-                    {% endfor %}
-                </select>
             </div>
             <div class="col-auto">
                 <button type="submit" class="btn btn-outline-secondary">Load</button>
@@ -75,37 +72,54 @@
             <input type="hidden" name="entry_type" value="bulk">
             <input type="hidden" name="sale_date" value="{{ sale_date|date:'Y-m-d' }}">
 
-            <div class="card p-0 overflow-hidden mb-4">
-                <div class="table-responsive" style="max-height: 60vh; overflow:auto;">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead class="table-light sticky-head">
-                            <tr>
-                                <th class="ps-3">#</th>
-                                <th>Product</th>
-                                <th class="text-end">Sell</th>
-                                <th class="text-end">Cost</th>
-                                <th class="pe-3 text-end" style="width:160px;">Amount Sold</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for product, qty, sell in rows %}
-                            <tr>
-                                <td class="ps-3 text-muted">{{ forloop.counter }}</td>
-                                <td>{{ product.product_name }} <small class="text-muted">({{ product.category }})</small></td>
-                                <td class="text-end">{{ sell }}</td>
-                                <td class="text-end">{{ product.cost_price }}</td>
-                                <td class="pe-3">
-                                    <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
-                                           class="form-control form-control-sm text-end" value="{{ qty }}" placeholder="0">
-                                </td>
-                            </tr>
-                            {% empty %}
-                            <tr><td colspan="5" class="text-center py-4 text-muted">No products to show.</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+            {% for cat_data in categories_data %}
+            <div class="category-section">
+                <div class="card p-0 overflow-hidden mb-2">
+                    <div class="category-header card-header bg-light d-flex justify-content-between align-items-center py-2"
+                         data-bs-toggle="collapse" data-bs-target="#collapse-{{ forloop.counter }}" aria-expanded="true">
+                        <h6 class="mb-0 fw-bold text-primary">{{ cat_data.name }} <span class="badge bg-secondary ms-2">{{ cat_data.rows|length }}</span></h6>
+                        <i class="bi bi-chevron-down fs-5"></i>
+                    </div>
+                    <div class="collapse show" id="collapse-{{ forloop.counter }}">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead class="table-light sticky-head">
+                                    <tr>
+                                        <th class="ps-3" style="width:40px;">#</th>
+                                        <th>Product</th>
+                                        <th class="text-end" style="width:100px;">Sell Price</th>
+                                        <th class="text-end" style="width:100px;">Cost Price</th>
+                                        <th class="pe-3 text-end" style="width:140px;">Amount Sold</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for product, qty, sell, cost in cat_data.rows %}
+                                    <tr>
+                                        <td class="ps-3 text-muted">{{ forloop.counter }}</td>
+                                        <td>{{ product.product_name }}</td>
+                                        <td class="text-end">
+                                            <input type="number" name="sell_{{ product.pk }}" min="0" step="0.01"
+                                                   class="form-control form-control-sm text-end price-input" value="{{ sell|floatformat:2 }}">
+                                        </td>
+                                        <td class="text-end">
+                                            <input type="number" name="cost_{{ product.pk }}" min="0" step="0.01"
+                                                   class="form-control form-control-sm text-end price-input" value="{{ cost|floatformat:2 }}">
+                                        </td>
+                                        <td class="pe-3">
+                                            <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
+                                                   class="form-control form-control-sm text-end qty-input" value="{{ qty }}" placeholder="0">
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
+            {% empty %}
+            <div class="card p-4 text-center text-muted">No products found.</div>
+            {% endfor %}
 
             <!-- Custom items -->
             <div class="card p-3 mb-4">
@@ -190,5 +204,8 @@
         addRow();
     })();
     </script>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
