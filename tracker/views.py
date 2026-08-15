@@ -354,12 +354,18 @@ def daily_sales(request):
             ))
         categories_data.append({'name': 'Custom', 'rows': rows})
 
+    manual_categories = SALES_CATEGORIES + sorted(
+        c for c in Product.objects.values_list('category', flat=True).distinct()
+        if c and c not in SALES_CATEGORIES
+    )
+
     return render(request, 'tracker/daily_sales.html', {
         'shop': shop,
         'sale_date': sale_date,
         'categories_data': categories_data,
         'saved': saved,
         'sales_categories': SALES_CATEGORIES,
+        'manual_categories': manual_categories,
         'expenses': expenses,
         'total_expenses': total_expenses,
         'sales_profit': sales_profit,
