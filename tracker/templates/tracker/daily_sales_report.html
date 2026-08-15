@@ -29,9 +29,11 @@
         </div>
 
         <div class="card p-4 stat-card text-center mb-4">
-            <h6 class="text-uppercase opacity-75">Grand Total — {{ report_date }}</h6>
-            <h1 class="display-5 fw-bold">KSh {{ grand_profit|floatformat:2 }}</h1>
-            <div class="d-flex justify-content-center gap-4 mt-2">
+            <h6 class="text-uppercase opacity-75">Net Profit — {{ report_date }}</h6>
+            <h1 class="display-5 fw-bold">KSh {{ grand_net|floatformat:2 }}</h1>
+            <div class="d-flex justify-content-center gap-4 mt-2 flex-wrap">
+                <span class="opacity-75">Sales: KSh {{ grand_profit|floatformat:2 }}</span>
+                <span class="opacity-75">Expenses: KSh {{ grand_expenses|floatformat:2 }}</span>
                 <span class="opacity-75">{{ grand_units|floatformat:2 }} units</span>
                 <a href="{% url 'daily_sales_report_export' %}?date={{ report_date|date:'Y-m-d' }}" class="text-white fw-bold">📥 Download Excel</a>
             </div>
@@ -43,7 +45,9 @@
                 <div class="card p-0 shop-card overflow-hidden">
                     <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
                         <h6 class="mb-0 fw-bold">🏪 {{ shop.name }}</h6>
-                        <span class="text-success fw-bold">+KSh {{ shop.profit|floatformat:2 }} <small class="text-muted fw-normal">({{ shop.units|floatformat:2 }} units)</small></span>
+                        <span class="text-success fw-bold">+KSh {{ shop.net_profit|floatformat:2 }}
+                            <small class="text-muted fw-normal">(gross {{ shop.profit|floatformat:2 }} · exp {{ shop.expenses|floatformat:2 }} · {{ shop.units|floatformat:2 }} units)</small>
+                        </span>
                     </div>
                     {% if shop.sales %}
                     <div class="table-responsive">

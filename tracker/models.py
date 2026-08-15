@@ -84,3 +84,19 @@ class ProductShopPrice(models.Model):
 
     def __str__(self):
         return f"{self.product.product_name} @ {self.shop}: {self.selling_price}"
+
+
+class DailyExpense(models.Model):
+    shop = models.CharField("Shop", max_length=50, choices=SHOP_CHOICES, blank=True, default='')
+    date = models.DateField(default=timezone.now)
+    description = models.CharField("Description", max_length=255, blank=True, default='')
+    amount = models.DecimalField("Amount", max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date', '-created_at']
+        verbose_name = "Daily Expense"
+        verbose_name_plural = "Daily Expenses"
+
+    def __str__(self):
+        return f"{self.shop or 'Unassigned'} {self.date}: {self.description or '-'} ({self.amount})"
