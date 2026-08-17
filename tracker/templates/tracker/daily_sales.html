@@ -79,10 +79,13 @@
             {% for cat_data in categories_data %}
             <div class="category-section">
                 <div class="card p-0 overflow-hidden mb-2">
-                    <div class="category-header card-header bg-light d-flex justify-content-between align-items-center py-2"
+                    <div class="category-header card-header bg-light d-flex justify-content-between align-items-center gap-2 py-2"
                          data-bs-toggle="collapse" data-bs-target="#collapse-{{ forloop.counter }}" aria-expanded="true">
-                        <h6 class="mb-0 fw-bold text-primary">{{ cat_data.name }} <span class="badge bg-secondary ms-2">{{ cat_data.rows|length }}</span></h6>
-                        <i class="bi bi-chevron-down fs-5"></i>
+                        <h6 class="mb-0 fw-bold text-primary text-nowrap">{{ cat_data.name }} <span class="badge bg-secondary ms-2">{{ cat_data.rows|length }}</span></h6>
+                        <input type="search" class="form-control form-control-sm category-search d-none d-sm-block" style="max-width:220px;"
+                               placeholder="Search {{ cat_data.name }}..." data-collapse="#collapse-{{ forloop.counter }}"
+                               onclick="event.stopPropagation()">
+                        <i class="bi bi-chevron-down fs-5 text-nowrap"></i>
                     </div>
                     <div class="collapse show" id="collapse-{{ forloop.counter }}">
                         <div class="table-responsive">
@@ -279,6 +282,18 @@
                 expContainer.appendChild(node);
             });
         }
+
+        document.querySelectorAll('.category-search').forEach(function (input) {
+            input.addEventListener('input', function () {
+                var q = input.value.trim().toLowerCase();
+                var panel = document.querySelector(input.dataset.collapse);
+                if (!panel) return;
+                panel.querySelectorAll('tbody tr').forEach(function (tr) {
+                    var name = tr.children[1] ? tr.children[1].textContent.toLowerCase() : '';
+                    tr.style.display = name.indexOf(q) === -1 ? 'none' : '';
+                });
+            });
+        });
     })();
     </script>
 
