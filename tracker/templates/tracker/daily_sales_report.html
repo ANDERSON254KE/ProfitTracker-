@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Daily Sales Report</title>
+    <title>Sales Report</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f0f2f5; }
         .card { border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-radius: 15px; margin-bottom: 1.5rem; }
         .shop-card { border-top: 5px solid #0d6efd; }
         .stat-card { background: linear-gradient(135deg, #0d6efd, #0dcaf0); color: white; }
+        .chart-wrap { position: relative; height: 320px; }
     </style>
 </head>
 <body class="pb-5">
@@ -20,25 +21,67 @@
     </nav>
 
     <div class="container container-md">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h2 class="h4 fw-bold mb-0">📊 Daily Sales Report</h2>
-            <form method="GET" action="{% url 'daily_sales_report' %}" class="d-flex gap-2 align-items-center">
-                <input type="date" name="date" class="form-control" value="{{ report_date|date:'Y-m-d' }}">
-                <button class="btn btn-outline-primary">View</button>
-            </form>
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h2 class="h4 fw-bold mb-0">📊 Sales Report</h2>
+            <a href="{% url 'daily_sales_report_export' %}?start={{ start|date:'Y-m-d' }}&end={{ end|date:'Y-m-d' }}" class="btn btn-success btn-sm">📥 Download Excel</a>
         </div>
 
+        <!-- Filters -->
+        <div class="card p-3 mb-4">
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-sm-auto">
+                    <label class="form-label small text-muted mb-1">Date range</label>
+                    <form method="GET" action="{% url 'daily_sales_report' %}" class="d-flex gap-2 align-items-end">
+                        <input type="date" name="start" class="form-control form-control-sm" value="{{ start|date:'Y-m-d' }}">
+                        <span class="text-muted">to</span>
+                        <input type="date" name="end" class="form-control form-control-sm" value="{{ end|date:'Y-m-d' }}">
+                        <button class="btn btn-sm btn-primary">Apply</button>
+                    </form>
+                </div>
+                <div class="col-12 col-sm-auto">
+                    <label class="form-label small text-muted mb-1">Month</label>
+                    <form method="GET" action="{% url 'daily_sales_report' %}" class="d-flex gap-2 align-items-end">
+                        <input type="month" name="month" class="form-control form-control-sm" value="{{ current_month }}">
+                        <button class="btn btn-sm btn-outline-primary">View</button>
+                    </form>
+                </div>
+                <div class="col-12 col-sm-auto d-flex gap-1 flex-wrap align-items-end">
+                    <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?start={{ today_iso }}&end={{ today_iso }}">Today</a>
+                    <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?start={{ month_first }}&end={{ today_iso }}">MTD</a>
+                    <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?month={{ current_month }}">This Month</a>
+                </div>
+            </div>
+            <div class="text-muted small mt-2">Viewing: <strong>{{ period_label }}</strong></div>
+        </div>
+
+        <!-- Collective summary -->
         <div class="card p-4 stat-card text-center mb-4">
-            <h6 class="text-uppercase opacity-75">Net Profit — {{ report_date }}</h6>
+            <h6 class="text-uppercase opacity-75">Net Profit — {{ period_label }}</h6>
             <h1 class="display-5 fw-bold">KSh {{ grand_net|floatformat:2 }}</h1>
             <div class="d-flex justify-content-center gap-4 mt-2 flex-wrap">
                 <span class="opacity-75">Sales: KSh {{ grand_profit|floatformat:2 }}</span>
                 <span class="opacity-75">Expenses: KSh {{ grand_expenses|floatformat:2 }}</span>
                 <span class="opacity-75">{{ grand_units|floatformat:2 }} units</span>
-                <a href="{% url 'daily_sales_report_export' %}?date={{ report_date|date:'Y-m-d' }}" class="text-white fw-bold">📥 Download Excel</a>
             </div>
         </div>
 
+        <!-- Charts -->
+        <div class="row g-3">
+            <div class="col-12 col-lg-7">
+                <div class="card p-3">
+                    <h6 class="fw-bold mb-3">Net Profit Over Time</h6>
+                    <div class="chart-wrap"><canvas id="netChart"></canvas></div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-5">
+                <div class="card p-3">
+                    <h6 class="fw-bold mb-3">Per Shop — Net Profit</h6>
+                    <div class="chart-wrap"><canvas id="shopChart"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Per-shop breakdown -->
         <div class="row g-3">
             {% for shop in shops_data %}
             <div class="col-12 col-lg-6">
@@ -49,10 +92,10 @@
                             <small class="text-muted fw-normal">(gross {{ shop.profit|floatformat:2 }} · exp {{ shop.expenses|floatformat:2 }} · {{ shop.units|floatformat:2 }} units)</small>
                         </span>
                     </div>
-                    {% if shop.sales %}
-                    <div class="table-responsive">
+                    {% if shop.product_rows %}
+                    <div class="table-responsive" style="max-height: 340px;">
                         <table class="table table-sm align-middle mb-0">
-                            <thead class="table-light">
+                            <thead class="table-light sticky-top">
                                 <tr>
                                     <th class="ps-3">Product</th>
                                     <th class="text-end">Sold</th>
@@ -60,11 +103,11 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for s in shop.sales %}
+                                {% for r in shop.product_rows %}
                                 <tr>
-                                    <td class="ps-3">{{ s.product.product_name }} <small class="text-muted">({{ s.product.category }})</small></td>
-                                    <td class="text-end">{{ s.quantity_sold }}</td>
-                                    <td class="pe-3 text-end text-success">+KSh {{ s.profit }}</td>
+                                    <td class="ps-3">{{ r.product__product_name }} <small class="text-muted">({{ r.product__category }})</small></td>
+                                    <td class="text-end">{{ r.qty }}</td>
+                                    <td class="pe-3 text-end text-success">+KSh {{ r.profit|floatformat:2 }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -78,5 +121,56 @@
             {% endfor %}
         </div>
     </div>
+
+    {{ chart|json_script:"report-chart" }}
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+    (function () {
+        var el = document.getElementById('report-chart');
+        if (!el || typeof Chart === 'undefined') return;
+        var data;
+        try { data = JSON.parse(el.textContent); } catch (e) { return; }
+
+        var netColors = data.nets.map(function (v) { return v >= 0 ? 'rgba(25,135,84,0.75)' : 'rgba(220,53,69,0.75)'; });
+
+        new Chart(document.getElementById('netChart'), {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [
+                    { label: 'Net Profit', data: data.nets, backgroundColor: netColors },
+                    { label: 'Expenses', data: data.expenses, backgroundColor: 'rgba(220,53,69,0.45)' }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } },
+                plugins: { legend: { position: 'top' } }
+            }
+        });
+
+        new Chart(document.getElementById('shopChart'), {
+            type: 'bar',
+            data: {
+                labels: data.shops,
+                datasets: [{
+                    label: 'Net Profit',
+                    data: data.shop_nets,
+                    backgroundColor: 'rgba(13,110,253,0.75)'
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { x: { beginAtZero: true } },
+                plugins: { legend: { display: false } }
+            }
+        });
+    })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

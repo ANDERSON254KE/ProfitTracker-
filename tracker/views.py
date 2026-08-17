@@ -4,7 +4,8 @@ from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import json
 from rapidfuzz import process, fuzz
 import pandas as pd
 from .models import Product, Transaction, DailySale, ProductShopPrice, DailyExpense
@@ -434,9 +435,101 @@ def daily_sales_export(request):
     response['Content-Disposition'] = f'attachment; filename="daily_sales_{safe_shop}_{sale_date}.xlsx"'
     return response
 
+def _strict_date(value):
+    try:
+        return datetime.strptime(str(value), '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _iso_month(value):
+    """Return a (year, month) tuple from 'YYYY-MM' or None."""
+    try:
+        return int(str(value)[:4]), int(str(value)[5:7])
+    except (ValueError, IndexError):
+        return None
+
+
+def _month_bounds(value):
+    ym = _iso_month(value)
+    if not ym or not (1 <= ym[1] <= 12):
+        return None
+    y, m = ym
+    first = date(y, m, 1)
+    if m == 12:
+        last = date(y + 1, 1, 1)
+    else:
+        last = date(y, m + 1, 1)
+    return first, last - timedelta(days=1)
+
+
+def _report_period(request):
+    """Return (start, end, label) for the report based on request params.
+
+    Priority: explicit start+end range > month > single date > today.
+    """
+    today = date.today()
+    start = _strict_date(request.GET.get('start'))
+    end = _strict_date(request.GET.get('end'))
+    if start and end:
+        if end >= start:
+            return start, end, f"{start} → {end}"
+
+    bounds = _month_bounds(request.GET.get('month'))
+    if bounds:
+        return bounds[0], bounds[1], bounds[0].strftime('%B %Y')
+
+    day = _strict_date(request.GET.get('date'))
+    if day:
+        return day, day, str(day)
+
+    return today, today, str(today)
+
+
+def _report_series(sale_by_date, exp_by_date, start, end):
+    """Build chart series (labels, profits, expenses, nets).
+
+    Daily for ranges up to 62 days, otherwise bucketed weekly.
+    """
+    labels, profits, expenses = [], [], []
+    if (end - start).days <= 62:
+        cur = start
+        while cur <= end:
+            sp = float(sale_by_date.get(cur, 0))
+            ex = float(exp_by_date.get(cur, 0))
+            labels.append(cur.strftime('%d %b'))
+            profits.append(sp)
+            expenses.append(ex)
+            cur += timedelta(days=1)
+    else:
+        buckets = {}
+        order = []
+        cur = start
+        while cur <= end:
+            wk = cur.isocalendar()[:2]
+            if wk not in buckets:
+                buckets[wk] = {'sp': 0.0, 'ex': 0.0, 'label': cur.strftime('%d %b')}
+                order.append(wk)
+            buckets[wk]['sp'] += float(sale_by_date.get(cur, 0))
+            buckets[wk]['ex'] += float(exp_by_date.get(cur, 0))
+            cur += timedelta(days=1)
+        for wk in order:
+            b = buckets[wk]
+            labels.append(b['label'])
+            profits.append(b['sp'])
+            expenses.append(b['ex'])
+    nets = [p - e for p, e in zip(profits, expenses)]
+    return labels, profits, expenses, nets
+
+
 def daily_sales_report(request):
-    report_date = _parse_date(request.GET.get('date'))
-    sales = DailySale.objects.filter(date=report_date).select_related('product').order_by('shop', 'product__product_name')
+    start, end, period_label = _report_period(request)
+    sales = (
+        DailySale.objects.filter(date__gte=start, date__lte=end)
+        .select_related('product').order_by('shop', 'product__product_name')
+    )
+    expense_qs = DailyExpense.objects.filter(date__gte=start, date__lte=end)
+
     shops_data = []
     grand_profit = grand_units = grand_expenses = grand_net = Decimal('0.00')
     for name in SHOPS:
@@ -444,29 +537,40 @@ def daily_sales_report(request):
         profit = qs.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
         units = qs.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
         expenses = (
-            DailyExpense.objects.filter(shop=name, date=report_date)
-            .aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+            expense_qs.filter(shop=name).aggregate(Sum('amount'))['amount__sum']
+            or Decimal('0.00')
         )
         net = profit - expenses
+        product_rows = list(
+            qs.values('product__product_name', 'product__category')
+            .annotate(qty=Sum('quantity_sold'), profit=Sum('profit'))
+            .order_by('product__product_name')
+        )
         grand_profit += profit
         grand_units += units
         grand_expenses += expenses
         grand_net += net
         shops_data.append({
             'name': name,
-            'sales': qs,
+            'product_rows': product_rows,
             'profit': profit,
             'expenses': expenses,
             'net_profit': net,
             'units': units,
         })
+
     unassigned = sales.exclude(shop__in=SHOPS)
     if unassigned.exists():
         up = unassigned.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
         uu = unassigned.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
         ue = (
-            DailyExpense.objects.filter(date=report_date).exclude(shop__in=SHOPS)
-            .aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+            expense_qs.exclude(shop__in=SHOPS).aggregate(Sum('amount'))['amount__sum']
+            or Decimal('0.00')
+        )
+        product_rows = list(
+            unassigned.values('product__product_name', 'product__category')
+            .annotate(qty=Sum('quantity_sold'), profit=Sum('profit'))
+            .order_by('product__product_name')
         )
         grand_profit += up
         grand_units += uu
@@ -474,24 +578,53 @@ def daily_sales_report(request):
         grand_net += (up - ue)
         shops_data.append({
             'name': 'Unassigned',
-            'sales': unassigned,
+            'product_rows': product_rows,
             'profit': up,
             'expenses': ue,
             'net_profit': up - ue,
             'units': uu,
         })
+
+    sale_by_date = {
+        r['date']: r['subtotal']
+        for r in sales.values('date').annotate(subtotal=Sum('profit')).order_by('date')
+    }
+    exp_by_date = {
+        r['date']: r['subtotal']
+        for r in expense_qs.values('date').annotate(subtotal=Sum('amount')).order_by('date')
+    }
+    labels, profits, expenses, nets = _report_series(sale_by_date, exp_by_date, start, end)
+    chart = {
+        'labels': labels,
+        'profits': profits,
+        'expenses': expenses,
+        'nets': nets,
+        'shops': [s['name'] for s in shops_data],
+        'shop_nets': [float(s['net_profit']) for s in shops_data],
+    }
+
     return render(request, 'tracker/daily_sales_report.html', {
         'shops_data': shops_data,
         'grand_profit': grand_profit,
         'grand_units': grand_units,
         'grand_expenses': grand_expenses,
         'grand_net': grand_net,
-        'report_date': report_date,
+        'period_label': period_label,
+        'start': start,
+        'end': end,
+        'month_value': end.strftime('%Y-%m'),
+        'today_iso': date.today().strftime('%Y-%m-%d'),
+        'month_first': date.today().replace(day=1).strftime('%Y-%m-%d'),
+        'current_month': date.today().strftime('%Y-%m'),
+        'chart': chart,
     })
 
 def daily_sales_report_export(request):
-    report_date = _parse_date(request.GET.get('date'))
-    sales = DailySale.objects.filter(date=report_date).select_related('product').order_by('shop', 'product__product_name')
+    start, end, period_label = _report_period(request)
+    sales = (
+        DailySale.objects.filter(date__gte=start, date__lte=end)
+        .select_related('product').order_by('shop', 'product__product_name')
+    )
     columns = ['Shop', 'Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit', 'Date']
     rows = [{
         'Shop': s.shop or 'Unassigned',
@@ -507,7 +640,7 @@ def daily_sales_report_export(request):
         grand_profit = 0.0
         grand_expenses = 0.0
         expense_rows = (
-            DailyExpense.objects.filter(date=report_date)
+            DailyExpense.objects.filter(date__gte=start, date__lte=end)
             .values('shop').annotate(total=Sum('amount'))
         )
         expenses_by_shop = {r['shop'] or 'Unassigned': r['total'] for r in expense_rows}
@@ -565,11 +698,12 @@ def daily_sales_report_export(request):
         rows = [{k: None for k in columns}]
     df = pd.DataFrame(rows, columns=columns)
     buffer = BytesIO()
-    df.to_excel(buffer, index=False, sheet_name=f'Daily Report {report_date}')
+    df.to_excel(buffer, index=False, sheet_name=f'Report {period_label}')
     buffer.seek(0)
     response = HttpResponse(
         buffer.read(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-    response['Content-Disposition'] = f'attachment; filename="daily_report_{report_date}.xlsx"'
+    safe = period_label.replace('/', '-').replace(' ', '_').replace('→', 'to')
+    response['Content-Disposition'] = f'attachment; filename="report_{safe}.xlsx"'
     return response
