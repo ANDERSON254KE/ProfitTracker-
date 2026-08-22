@@ -45,13 +45,20 @@
         </div>
         {% else %}
         <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
-            <div>
-                <h3 class="mb-0 fw-bold">Daily Sales</h3>
-                <span class="badge bg-info text-dark">{{ shop }}</span>
-            </div>
+        <div>
+            <h3 class="mb-0 fw-bold">Daily Sales</h3>
+            <span class="badge bg-info text-dark">{{ shop }}</span>
         </div>
+    </div>
 
-        {% if saved %}
+    {% if not date_is_today %}
+    <div class="alert alert-warning py-2 mb-3">
+        ⚠️ Viewing <strong>{{ sale_date|date:'j M Y' }}</strong> — this does <strong>not</strong> match today (<strong>{{ today_iso }}</strong>). Entries will be saved for this date until you change it.
+        <a href="{% url 'daily_sales' %}?reset_date=1" class="btn btn-sm btn-outline-dark ms-2">Use Today</a>
+    </div>
+    {% endif %}
+
+    {% if saved %}
         <div class="alert alert-success py-2 mb-0">
             ✅ Saved. Sales profit <strong>KSh {{ sales_profit|floatformat:2 }}</strong>
             – expenses <strong>KSh {{ total_expenses|floatformat:2 }}</strong>

@@ -194,8 +194,16 @@ def daily_sales_product_lookup(request):
 def daily_sales(request):
     shop = request.session.get('daily_sales_shop', '')
 
+    # Persist the chosen date in the session so it survives shop switches.
+    date_param = request.GET.get('date')
+    if date_param:
+        request.session['daily_sales_date'] = date_param
+
     if request.GET.get('reset'):
         request.session['daily_sales_shop'] = ''
+        return redirect(reverse('daily_sales'))
+    if request.GET.get('reset_date'):
+        request.session['daily_sales_date'] = ''
         return redirect(reverse('daily_sales'))
 
     if request.method == "POST":
@@ -307,7 +315,11 @@ def daily_sales(request):
             'shops': SHOPS,
         })
 
-    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    sale_date = (
+        _parse_date(request.GET.get('date'))
+        or _parse_date(request.session.get('daily_sales_date'))
+        or date.today()
+    )
     products = _sale_products()
 
     existing = {
@@ -364,6 +376,8 @@ def daily_sales(request):
     return render(request, 'tracker/daily_sales.html', {
         'shop': shop,
         'sale_date': sale_date,
+        'date_is_today': sale_date == date.today(),
+        'today_iso': date.today().strftime('%Y-%m-%d'),
         'categories_data': categories_data,
         'saved': saved,
         'sales_categories': SALES_CATEGORIES,
