@@ -6,6 +6,7 @@ from io import BytesIO
 from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta
 import json
+import re
 from rapidfuzz import process, fuzz
 import pandas as pd
 from .models import Product, Transaction, DailySale, ProductShopPrice, DailyExpense
@@ -433,6 +434,94 @@ def daily_sales_export(request):
     )
     safe_shop = (shop or 'Unassigned').replace(' ', '_')
     response['Content-Disposition'] = f'attachment; filename="daily_sales_{safe_shop}_{sale_date}.xlsx"'
+    return response
+
+def _safe_sheet_name(name):
+    """Excel tab names: max 31 chars, none of : \\ / ? * [ ]."""
+    cleaned = re.sub(r'[:\\/?*\[\]]', ' ', str(name)).strip()
+    return (cleaned or 'Sheet')[:31]
+
+
+def daily_sales_day_export(request):
+    """Export every shop's sales for a single day into one workbook: one tab
+    per shop (its products + TOTAL/EXPENSES/NET) plus an 'All Shops' summary tab.
+    """
+    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    all_sales = DailySale.objects.filter(date=sale_date).select_related('product')
+    columns = ['Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit']
+
+    # (tab label, sales queryset, expenses queryset) — the four shops, then any
+    # sales/expenses whose shop is unknown (only if such rows exist).
+    segments = [
+        (name, all_sales.filter(shop=name),
+         DailyExpense.objects.filter(shop=name, date=sale_date))
+        for name in SHOPS
+    ]
+    unassigned = all_sales.exclude(shop__in=SHOPS)
+    if unassigned.exists():
+        segments.append((
+            'Unassigned', unassigned,
+            DailyExpense.objects.filter(date=sale_date).exclude(shop__in=SHOPS),
+        ))
+
+    summary_rows = []
+    grand_units = Decimal('0.00')
+    grand_profit = 0.0
+    grand_expenses = 0.0
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        for name, qs, exp_qs in segments:
+            rows = [{
+                'Product': s.product.product_name,
+                'Category': s.product.category,
+                'Selling Price': float(s.sell_price),
+                'Amount Sold': s.quantity_sold,
+                'Profit': float(s.profit),
+            } for s in qs.order_by('product__product_name')]
+
+            units = sum((r['Amount Sold'] for r in rows), Decimal('0.00'))
+            profit = sum((r['Profit'] for r in rows), 0.0)
+            expenses = float(exp_qs.aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00'))
+            net = profit - expenses
+
+            grand_units += units
+            grand_profit += profit
+            grand_expenses += expenses
+            summary_rows.append({
+                'Shop': name,
+                'Amount Sold': units,
+                'Profit': profit,
+                'Expenses': expenses,
+                'Net Profit': net,
+            })
+
+            rows.append({'Product': 'TOTAL', 'Category': '', 'Selling Price': None, 'Amount Sold': units, 'Profit': profit})
+            rows.append({'Product': 'EXPENSES', 'Category': '', 'Selling Price': None, 'Amount Sold': None, 'Profit': -expenses})
+            rows.append({'Product': 'NET PROFIT', 'Category': '', 'Selling Price': None, 'Amount Sold': None, 'Profit': net})
+
+            df = pd.DataFrame(rows, columns=columns)
+            df.to_excel(writer, index=False, sheet_name=_safe_sheet_name(name))
+
+        summary_rows.append({
+            'Shop': 'GRAND TOTAL',
+            'Amount Sold': grand_units,
+            'Profit': grand_profit,
+            'Expenses': grand_expenses,
+            'Net Profit': grand_profit - grand_expenses,
+        })
+        summary_df = pd.DataFrame(
+            summary_rows,
+            columns=['Shop', 'Amount Sold', 'Profit', 'Expenses', 'Net Profit'],
+        )
+        summary_df.to_excel(writer, index=False, sheet_name='All Shops')
+
+    buffer.seek(0)
+    response = HttpResponse(
+        buffer.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = f'attachment; filename="all_shops_{sale_date}.xlsx"'
     return response
 
 def _strict_date(value):

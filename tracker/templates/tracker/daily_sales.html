@@ -174,10 +174,11 @@
                 </div>
             </div>
 
-            <div class="d-flex gap-2 mb-4">
+            <div class="d-flex flex-wrap gap-2 mb-4">
                 <button type="submit" class="btn btn-primary btn-lg flex-fill">💾 Save All & Calculate</button>
                 <a href="{% url 'daily_sales_report' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-outline-info btn-lg">📊 Report</a>
-                <a href="{% url 'daily_sales_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📥 Excel</a>
+                <a href="{% url 'daily_sales_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📥 This Shop</a>
+                <a href="{% url 'daily_sales_day_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📦 All Shops</a>
             </div>
         </form>
         {% endif %}
