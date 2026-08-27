@@ -83,6 +83,41 @@
             <input type="hidden" name="entry_type" value="bulk">
             <input type="hidden" name="sale_date" value="{{ sale_date|date:'Y-m-d' }}">
 
+            <!-- Manual day totals (typed by you) — feed the copyable Day Summary popup -->
+            <div class="card p-3 mb-3 border-primary border-opacity-25">
+                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                    <h6 class="mb-0 fw-bold text-primary">🧮 Day Totals — {{ shop }}</h6>
+                    <span class="text-muted small">Typed by you · saved for {{ sale_date|date:'j M Y' }}</span>
+                </div>
+                <div class="row g-2">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Sales</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" name="total_sales" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 20000" value="{{ day_sales_val }}">
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Profit</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" name="total_profit" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 5000" value="{{ day_profit_val }}">
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Expenditure</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" name="total_expenditure" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 1000" value="{{ day_exp_val }}">
+                        </div>
+                    </div>
+                </div>
+                <p class="text-muted small mb-0 mt-2">Net profit is worked out for you (Profit − Expenditure). Use <strong>💾 Save</strong> to keep them, then <strong>📋 Day Summary</strong> for the all-branches copy.</p>
+            </div>
+
             {% for cat_data in categories_data %}
             <div class="category-section">
                 <div class="card p-0 overflow-hidden mb-2">
@@ -145,49 +180,133 @@
                 <p class="text-muted small mb-0">Tip: type a previously added item name and its buying/selling prices and category fill in automatically.</p>
             </div>
 
-            <!-- Daily expenses -->
-            <div class="card p-3 mb-4">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="mb-0 fw-bold">💸 Daily Expenses</h6>
-                    <button type="button" class="btn btn-sm btn-outline-danger" id="addExpense">+ Add expense</button>
-                </div>
-                <p class="text-muted small mb-2">These are subtracted from the day's sales profit to get the net profit.</p>
-                <div id="expenseRows">
-                    {% for e in expenses %}
-                    <div class="row g-2 mb-2 expense-row align-items-end">
-                        <div class="col">
-                            <input type="text" name="expense_description" value="{{ e.description }}" class="form-control form-control-sm" placeholder="Description (e.g. transport, staff, broken bottles)">
-                        </div>
-                        <div class="col-3">
-                            <input type="number" name="expense_amount" value="{{ e.amount }}" min="0" step="0.01" class="form-control form-control-sm text-end" placeholder="Amount">
-                        </div>
-                        <div class="col-auto">
-                            <button type="button" class="btn btn-sm btn-outline-danger rmExpense">✕</button>
-                        </div>
-                    </div>
-                    {% empty %}
-                    <div class="row g-2 mb-2 expense-row align-items-end">
-                        <div class="col">
-                            <input type="text" name="expense_description" class="form-control form-control-sm" placeholder="Description (e.g. transport, staff, broken bottles)">
-                        </div>
-                        <div class="col-3">
-                            <input type="number" name="expense_amount" min="0" step="0.01" class="form-control form-control-sm text-end" placeholder="Amount">
-                        </div>
-                        <div class="col-auto">
-                            <button type="button" class="btn btn-sm btn-outline-danger rmExpense">✕</button>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-
             <div class="d-flex flex-wrap gap-2 mb-4">
                 <button type="submit" class="btn btn-primary btn-lg flex-fill">💾 Save All & Calculate</button>
+                <button type="button" class="btn btn-dark btn-lg" data-bs-toggle="modal" data-bs-target="#summaryModal">📋 Day Summary</button>
                 <a href="{% url 'daily_sales_report' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-outline-info btn-lg">📊 Report</a>
                 <a href="{% url 'daily_sales_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📥 This Shop</a>
                 <a href="{% url 'daily_sales_day_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📦 All Shops</a>
             </div>
         </form>
+
+        <!-- Day Summary popup — combines all branches for the day into a copyable block -->
+        {{ branch_totals|json_script:"branchTotals" }}
+        <div class="modal fade" id="summaryModal" tabindex="-1" aria-hidden="true"
+             data-shop="{{ shop }}" data-date="{{ sale_date|date:'j M Y' }}">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">📋 Day Summary — all branches</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small mb-2">
+                            All branches for <strong>{{ sale_date|date:'j M Y' }}</strong>, from each branch's saved
+                            Day Totals. <strong>{{ shop }}</strong> shows what's typed above right now — press
+                            💾 Save first so every branch is up to date.
+                        </p>
+                        <textarea id="summaryText" class="form-control" rows="12" readonly
+                                  style="font-family:monospace;"></textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary" id="copySummary">📋 Copy</button>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+        (function () {
+            var modalEl = document.getElementById('summaryModal');
+            if (!modalEl) return;
+
+            function money(n) {
+                return 'KSh ' + (n || 0).toLocaleString('en-US', {
+                    minimumFractionDigits: 2, maximumFractionDigits: 2
+                });
+            }
+
+            function row(label, val) {
+                return '  ' + (label + ':').padEnd(9) + ' ' + money(val);
+            }
+
+            function liveVal(name) {
+                var el = document.querySelector('input[name="' + name + '"]');
+                return el ? (parseFloat(el.value) || 0) : 0;
+            }
+
+            function buildSummary() {
+                var data;
+                try {
+                    data = JSON.parse(document.getElementById('branchTotals').textContent);
+                } catch (e) {
+                    data = {};
+                }
+                // The branch being edited reflects the values typed on screen now.
+                var current = modalEl.dataset.shop;
+                if (current && data[current]) {
+                    data[current] = {
+                        sales: liveVal('total_sales'),
+                        profit: liveVal('total_profit'),
+                        exp: liveVal('total_expenditure')
+                    };
+                }
+
+                var lines = ['Day Summary — ' + (modalEl.dataset.date || '')];
+                var gS = 0, gP = 0, gE = 0, shown = 0;
+                Object.keys(data).forEach(function (name) {
+                    var b = data[name];
+                    gS += b.sales; gP += b.profit; gE += b.exp;
+                    if (b.sales || b.profit || b.exp) {
+                        shown++;
+                        lines.push('');
+                        lines.push(name);
+                        lines.push(row('Sales', b.sales));
+                        lines.push(row('Profit', b.profit));
+                        lines.push(row('Expenses', b.exp));
+                        lines.push(row('Net', b.profit - b.exp));
+                    }
+                });
+                if (!shown) {
+                    lines.push('');
+                    lines.push('(No branch totals entered for this day yet.)');
+                }
+                lines.push('');
+                lines.push('ALL BRANCHES');
+                lines.push(row('Sales', gS));
+                lines.push(row('Profit', gP));
+                lines.push(row('Expenses', gE));
+                lines.push(row('Net', gP - gE));
+                return lines.join('\n');
+            }
+
+            modalEl.addEventListener('show.bs.modal', function () {
+                document.getElementById('summaryText').value = buildSummary();
+            });
+
+            var copyBtn = document.getElementById('copySummary');
+            copyBtn.addEventListener('click', function () {
+                var ta = document.getElementById('summaryText');
+                ta.focus();
+                ta.select();
+                ta.setSelectionRange(0, 99999);
+                var done = function () {
+                    copyBtn.textContent = '✅ Copied';
+                    setTimeout(function () { copyBtn.textContent = '📋 Copy'; }, 1500);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(ta.value).then(done, function () {
+                        try { document.execCommand('copy'); } catch (e) {}
+                        done();
+                    });
+                } else {
+                    try { document.execCommand('copy'); } catch (e) {}
+                    done();
+                }
+            });
+        })();
+        </script>
         {% endif %}
     </div>
 
@@ -214,20 +333,6 @@
             </div>
             <div class="col-auto">
                 <button type="button" class="btn btn-sm btn-outline-danger rmManual">✕</button>
-            </div>
-        </div>
-    </template>
-
-    <template id="expenseTemplate">
-        <div class="row g-2 mb-2 expense-row align-items-end">
-            <div class="col">
-                <input type="text" name="expense_description" class="form-control form-control-sm" placeholder="Description (e.g. transport, staff, broken bottles)">
-            </div>
-            <div class="col-3">
-                <input type="number" name="expense_amount" min="0" step="0.01" class="form-control form-control-sm text-end" placeholder="Amount">
-            </div>
-            <div class="col-auto">
-                <button type="button" class="btn btn-sm btn-outline-danger rmExpense">✕</button>
             </div>
         </div>
     </template>
@@ -276,20 +381,6 @@
 
         addBtn.addEventListener('click', addRow);
         addRow();
-
-        var expContainer = document.getElementById('expenseRows');
-        var expTpl = document.getElementById('expenseTemplate');
-        var addExpBtn = document.getElementById('addExpense');
-        if (expContainer && addExpBtn) {
-            expContainer.addEventListener('click', function (e) {
-                var rm = e.target.closest('.rmExpense');
-                if (rm) rm.closest('.expense-row').remove();
-            });
-            addExpBtn.addEventListener('click', function () {
-                var node = expTpl.content.cloneNode(true);
-                expContainer.appendChild(node);
-            });
-        }
 
         document.querySelectorAll('.category-search').forEach(function (input) {
             input.addEventListener('input', function () {

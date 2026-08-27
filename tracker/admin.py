@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Product, Transaction, DailySale, ProductShopPrice, DailyExpense
+from .models import Product, Transaction, DailySale, ProductShopPrice, DailyExpense, DayTotals
 
 
 class ProductShopPriceInline(admin.TabularInline):
@@ -33,4 +33,11 @@ class DailyExpenseAdmin(admin.ModelAdmin):
     list_display = ('shop', 'date', 'description', 'amount')
     list_filter = ('date', 'shop')
     search_fields = ('description',)
+    show_full_result_count = False
+
+
+@admin.register(DayTotals)
+class DayTotalsAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'date', 'total_sales', 'total_profit', 'total_expenditure')
+    list_filter = ('date', 'shop')
     show_full_result_count = False

@@ -9,7 +9,7 @@ import json
 import re
 from rapidfuzz import process, fuzz
 import pandas as pd
-from .models import Product, Transaction, DailySale, ProductShopPrice, DailyExpense
+from .models import Product, Transaction, DailySale, ProductShopPrice, DayTotals
 
 SALES_CATEGORIES = ['250ml', '350ml', '750ml', 'soda', 'cans']
 SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
@@ -293,19 +293,17 @@ def daily_sales(request):
                         sale.cost_price = product.cost_price
                         sale.save()
 
-            DailyExpense.objects.filter(shop=shop, date=sale_date).delete()
-            exp_descrs = request.POST.getlist('expense_description')
-            exp_amounts = request.POST.getlist('expense_amount')
-            for d, a in zip(exp_descrs, exp_amounts):
-                descr = d.strip()
-                amt = _parse_decimal(a)
-                if descr and amt is not None and amt > 0:
-                    DailyExpense.objects.create(
-                        shop=shop,
-                        date=sale_date,
-                        description=descr,
-                        amount=amt,
-                    )
+            # Manually-typed day totals (Total Sales / Profit / Expenditure) for
+            # the copyable all-branches Day Summary.
+            DayTotals.objects.update_or_create(
+                shop=shop,
+                date=sale_date,
+                defaults={
+                    'total_sales': _parse_decimal(request.POST.get('total_sales')) or Decimal('0.00'),
+                    'total_profit': _parse_decimal(request.POST.get('total_profit')) or Decimal('0.00'),
+                    'total_expenditure': _parse_decimal(request.POST.get('total_expenditure')) or Decimal('0.00'),
+                },
+            )
 
             return redirect(f"{reverse('daily_sales')}?saved=1&date={sale_date}")
 
@@ -328,8 +326,9 @@ def daily_sales(request):
     }
     overrides = _shop_price_overrides(shop)
 
-    expenses = DailyExpense.objects.filter(shop=shop, date=sale_date)
-    total_expenses = expenses.aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+    # Expenditure is the single value the user types (DayTotals), not itemized.
+    day_totals = DayTotals.objects.filter(shop=shop, date=sale_date).first()
+    total_expenses = day_totals.total_expenditure if day_totals else Decimal('0.00')
 
     saved = request.GET.get('saved') == '1'
     sales_profit = net_profit = Decimal('0.00')
@@ -373,6 +372,21 @@ def daily_sales(request):
         if c and c not in SALES_CATEGORIES
     )
 
+    # Manually-typed day totals: this branch's saved values (to pre-fill the
+    # inputs) and every branch's values for the same date (for the popup).
+    def _prefill(v):
+        return ('%0.2f' % v) if v else ''
+
+    saved_totals = {dt.shop: dt for dt in DayTotals.objects.filter(date=sale_date)}
+    branch_totals = {}
+    for name in SHOPS:
+        dt = saved_totals.get(name)
+        branch_totals[name] = {
+            'sales': float(dt.total_sales) if dt else 0.0,
+            'profit': float(dt.total_profit) if dt else 0.0,
+            'exp': float(dt.total_expenditure) if dt else 0.0,
+        }
+
     return render(request, 'tracker/daily_sales.html', {
         'shop': shop,
         'sale_date': sale_date,
@@ -382,10 +396,13 @@ def daily_sales(request):
         'saved': saved,
         'sales_categories': SALES_CATEGORIES,
         'manual_categories': manual_categories,
-        'expenses': expenses,
         'total_expenses': total_expenses,
         'sales_profit': sales_profit,
         'net_profit': net_profit,
+        'day_sales_val': _prefill(day_totals.total_sales) if day_totals else '',
+        'day_profit_val': _prefill(day_totals.total_profit) if day_totals else '',
+        'day_exp_val': _prefill(day_totals.total_expenditure) if day_totals else '',
+        'branch_totals': branch_totals,
     })
 
 def daily_sales_export(request):
@@ -404,10 +421,8 @@ def daily_sales_export(request):
     if rows:
         total_units = sum((r['Amount Sold'] for r in rows), Decimal('0.00'))
         total_profit = sum((r['Profit'] for r in rows), 0.0)
-        expenses = (
-            DailyExpense.objects.filter(shop=shop, date=sale_date)
-            .aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
-        )
+        dt = DayTotals.objects.filter(shop=shop, date=sale_date).first()
+        expenses = dt.total_expenditure if dt else Decimal('0.00')
         net_profit = total_profit - float(expenses)
         rows.append({
             'Shop': '',
@@ -466,17 +481,17 @@ def daily_sales_day_export(request):
 
     # (tab label, sales queryset, expenses queryset) — the four shops, then any
     # sales/expenses whose shop is unknown (only if such rows exist).
+    day_exp = {dt.shop: dt.total_expenditure for dt in DayTotals.objects.filter(date=sale_date)}
     segments = [
-        (name, all_sales.filter(shop=name),
-         DailyExpense.objects.filter(shop=name, date=sale_date))
+        (name, all_sales.filter(shop=name), day_exp.get(name, Decimal('0.00')))
         for name in SHOPS
     ]
     unassigned = all_sales.exclude(shop__in=SHOPS)
     if unassigned.exists():
-        segments.append((
-            'Unassigned', unassigned,
-            DailyExpense.objects.filter(date=sale_date).exclude(shop__in=SHOPS),
-        ))
+        unassigned_exp = sum(
+            (v for k, v in day_exp.items() if k not in SHOPS), Decimal('0.00')
+        )
+        segments.append(('Unassigned', unassigned, unassigned_exp))
 
     summary_rows = []
     grand_units = Decimal('0.00')
@@ -485,7 +500,7 @@ def daily_sales_day_export(request):
 
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        for name, qs, exp_qs in segments:
+        for name, qs, exp_val in segments:
             rows = [{
                 'Product': s.product.product_name,
                 'Category': s.product.category,
@@ -496,7 +511,7 @@ def daily_sales_day_export(request):
 
             units = sum((r['Amount Sold'] for r in rows), Decimal('0.00'))
             profit = sum((r['Profit'] for r in rows), 0.0)
-            expenses = float(exp_qs.aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00'))
+            expenses = float(exp_val)
             net = profit - expenses
 
             grand_units += units
@@ -631,7 +646,7 @@ def daily_sales_report(request):
         DailySale.objects.filter(date__gte=start, date__lte=end)
         .select_related('product').order_by('shop', 'product__product_name')
     )
-    expense_qs = DailyExpense.objects.filter(date__gte=start, date__lte=end)
+    expense_qs = DayTotals.objects.filter(date__gte=start, date__lte=end)
 
     shops_data = []
     grand_profit = grand_units = grand_expenses = grand_net = Decimal('0.00')
@@ -640,7 +655,7 @@ def daily_sales_report(request):
         profit = qs.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
         units = qs.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
         expenses = (
-            expense_qs.filter(shop=name).aggregate(Sum('amount'))['amount__sum']
+            expense_qs.filter(shop=name).aggregate(Sum('total_expenditure'))['total_expenditure__sum']
             or Decimal('0.00')
         )
         net = profit - expenses
@@ -667,7 +682,7 @@ def daily_sales_report(request):
         up = unassigned.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
         uu = unassigned.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
         ue = (
-            expense_qs.exclude(shop__in=SHOPS).aggregate(Sum('amount'))['amount__sum']
+            expense_qs.exclude(shop__in=SHOPS).aggregate(Sum('total_expenditure'))['total_expenditure__sum']
             or Decimal('0.00')
         )
         product_rows = list(
@@ -694,7 +709,7 @@ def daily_sales_report(request):
     }
     exp_by_date = {
         r['date']: r['subtotal']
-        for r in expense_qs.values('date').annotate(subtotal=Sum('amount')).order_by('date')
+        for r in expense_qs.values('date').annotate(subtotal=Sum('total_expenditure')).order_by('date')
     }
     labels, profits, expenses, nets = _report_series(sale_by_date, exp_by_date, start, end)
     chart = {
@@ -743,8 +758,8 @@ def daily_sales_report_export(request):
         grand_profit = 0.0
         grand_expenses = 0.0
         expense_rows = (
-            DailyExpense.objects.filter(date__gte=start, date__lte=end)
-            .values('shop').annotate(total=Sum('amount'))
+            DayTotals.objects.filter(date__gte=start, date__lte=end)
+            .values('shop').annotate(total=Sum('total_expenditure'))
         )
         expenses_by_shop = {r['shop'] or 'Unassigned': r['total'] for r in expense_rows}
         grouped = {}

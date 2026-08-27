@@ -100,3 +100,30 @@ class DailyExpense(models.Model):
 
     def __str__(self):
         return f"{self.shop or 'Unassigned'} {self.date}: {self.description or '-'} ({self.amount})"
+
+
+class DayTotals(models.Model):
+    """Manually-entered day totals per branch, used for the copyable Day Summary.
+
+    These are typed by the user (not calculated) and saved once per shop/date.
+    """
+    shop = models.CharField("Shop", max_length=50, choices=SHOP_CHOICES, blank=True, default='')
+    date = models.DateField(default=timezone.now)
+    total_sales = models.DecimalField("Total Sales", max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_profit = models.DecimalField("Total Profit", max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_expenditure = models.DecimalField("Total Expenditure", max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date', 'shop']
+        unique_together = ('shop', 'date')
+        verbose_name = "Day Totals"
+        verbose_name_plural = "Day Totals"
+
+    @property
+    def net_profit(self):
+        return self.total_profit - self.total_expenditure
+
+    def __str__(self):
+        return f"{self.shop or 'Unassigned'} {self.date}: sales {self.total_sales}, net {self.net_profit}"
