@@ -23,7 +23,7 @@ class Command(BaseCommand):
         df = pd.read_excel(path, sheet_name="all")
         created = updated = skipped = 0
         price_keys = set()
-        for _, row in df.iterrows():
+        for idx, (_, row) in enumerate(df.iterrows()):
             name = row.get("Product")
             name = str(name).strip() if not pd.isna(name) else ""
             selling = self.to_dec(row.get("Selling Price"))
@@ -38,13 +38,14 @@ class Command(BaseCommand):
             obj, was = Product.objects.get_or_create(
                 product_name=name,
                 category=category,
-                defaults={"cost_price": cost, "selling_price": selling},
+                defaults={"cost_price": cost, "selling_price": selling, "order": idx},
             )
             if was:
                 created += 1
             else:
                 obj.cost_price = cost
                 obj.selling_price = selling
+                obj.order = idx
                 obj.save()
                 updated += 1
 

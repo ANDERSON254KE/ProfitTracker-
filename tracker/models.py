@@ -8,7 +8,11 @@ class Product(models.Model):
     category = models.CharField("Category", max_length=100, blank=True, null=True)
     cost_price = models.DecimalField("Cost Price", max_digits=10, decimal_places=2)
     selling_price = models.DecimalField("Default Selling Price", max_digits=10, decimal_places=2)
-    
+    order = models.PositiveIntegerField("Price List Order", default=9999, db_index=True)
+
+    class Meta:
+        ordering = ['order', 'product_name']
+
     def __str__(self):
         return f"{self.product_name} ({self.shop if self.shop else 'N/A'})"
 

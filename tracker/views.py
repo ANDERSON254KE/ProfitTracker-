@@ -14,34 +14,6 @@ from .models import Product, Transaction, DailySale, ProductShopPrice, DayTotals
 SALES_CATEGORIES = ['250ml', '350ml', '750ml', 'soda', 'cans']
 SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
 
-STOCK_SHEET_ORDER = [
-    'Gilbeys', 'Best Whiskey', 'Blue Ice', 'V&A', 'Bond 7', 'viceroy', 'Smirnoff',
-    'Kane', 'Napoleon', 'Konyagi', 'Richot', 'Kenya King', 'Muckpit', 'Captain Morgan',
-    'Origin', 'Chrome Vodka', 'Tripple Ace', 'Kibao', 'Hunters', 'Best Gin',
-    'William Grayson', 'Dallas', 'General Meakings', 'People Vodka', 'Smart Vodka',
-    'Best Vodka', 'Chrome Gin', 'County', 'carribian', 'Trace', 'KC. Pineapple',
-    'KC. smooth', 'KC .Ginger',
-    'Jameson', 'Richot', 'Black&white', 'All seasons', 'Gilbeys', 'Smirnoff',
-    'Kibao', 'CrazyCork', 'Hunters', 'Viceroy', 'Amarula', 'VAT 69',
-    'Black label', 'Red label',
-    'Kc smooth', 'KC. Pineapple', 'Kc.Ginger', 'Kane Extra', 'V&A', 'Hunters',
-    'All seasons', 'Kenya king', 'Chrome Vodka', 'Chrome Gin', 'Origin',
-    '4th street', 'Jameson 750ml', 'William Lawsons', 'viceroy', 'Black&white',
-    'Gilbeys', 'Captain Morgan', 'Cointy', 'Smirnoff', 'Kibao', 'General Meakings',
-    'Amarula 1ltr', 'Amarula 750', 'Best Gin', 'Best Whisky', 'Red label 750',
-    'Red Label 1 ltr', 'Black Label 750ml', 'Black Label 1ltr', 'Crazy Cock',
-    'Richot', 'VAT 69',
-    'Guarana', 'Guarana Black', 'Guiness', 'Tusker', 'Tusker Malt', 'Tusker Lite',
-    'Tusker cider', 'Snapp', 'pineapple Punch', 'Faxe', 'Redbull', 'Delmonte',
-    'Balozi', 'Whitecap', 'Caprice', 'Pilsner', 'Heineken',
-    'Tusker', 'Guiness', 'Tusker cider', 'Pilsner', 'White Cap', 'Kingfisher',
-    'Soda 500ml', 'Soda 350ml', 'Soda 300ml', 'Soda 200ml', 'Soda 1.25ltrs',
-    'Soda 2ltrs', 'mInutemaid Small', 'mInutemaid Big', 'Dasani Small',
-    'Dasani Big', 'Lemonade', 'predator', 'Kiss', 'Glacier Small', 'Glacier Big',
-]
-
-STOCK_SHEET_POSITION = {name.lower().strip(): idx for idx, name in enumerate(STOCK_SHEET_ORDER)}
-
 
 def _shop_price_overrides(shop):
     """Return {product_id: selling_price} for shop-specific price overrides."""
@@ -157,19 +129,9 @@ def _parse_decimal(value):
     except (InvalidOperation, TypeError, ValueError):
         return None
 
-def _stock_sheet_position(product):
-    key = product.product_name.lower().strip()
-    return STOCK_SHEET_POSITION.get(key, 9999)
-
-
 def _sale_products():
-    products = list(
-        Product.objects.filter(
-            Q(category__in=SALES_CATEGORIES) | Q(category='MANUAL'),
-            cost_price__gt=0,
-        )
-    )
-    products.sort(key=_stock_sheet_position)
+    products = list(Product.objects.all())
+    products.sort(key=lambda p: (p.order, p.product_name.lower()))
     return products
 
 def daily_sales_product_lookup(request):
@@ -340,19 +302,23 @@ def daily_sales(request):
         net_profit = sales_profit - total_expenses
 
     categories_data = []
-    for cat in SALES_CATEGORIES:
-        cat_products = [p for p in products if p.category == cat]
-        if cat_products:
-            rows = []
-            for p in cat_products:
-                sale = existing.get(p.pk)
-                rows.append((
-                    p,
-                    sale.quantity_sold if sale else '',
-                    overrides.get(p.pk, p.selling_price),
-                    sale.cost_price if sale else p.cost_price,
-                ))
-            categories_data.append({'name': cat, 'rows': rows})
+    grouped = {}
+    for p in products:
+        if not p.category or p.category == 'MANUAL':
+            continue
+        grouped.setdefault(p.category, []).append(p)
+    for cat in sorted(grouped, key=lambda c: min(p.order for p in grouped[c])):
+        cat_products = grouped[cat]
+        rows = []
+        for p in cat_products:
+            sale = existing.get(p.pk)
+            rows.append((
+                p,
+                sale.quantity_sold if sale else '',
+                overrides.get(p.pk, p.selling_price),
+                sale.cost_price if sale else p.cost_price,
+            ))
+        categories_data.append({'name': cat, 'rows': rows})
 
     custom_products = [p for p in products if p.category == 'MANUAL']
     if custom_products:
