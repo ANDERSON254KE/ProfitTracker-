@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "price list.xlsx"
+      - "tracker/management/commands/sync_products.py"
   schedule:
     - cron: "0 0 * * *"   # daily at midnight UTC
   workflow_dispatch:
