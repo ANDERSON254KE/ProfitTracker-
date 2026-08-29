@@ -23,6 +23,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Apply database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python manage.py migrate
+
       - name: Sync products to database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
