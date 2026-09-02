@@ -26,9 +26,7 @@ def dashboard(request):
     
     # 1. Search Logic (Fuzzy Match Support)
     if query:
-        # Exact/Partial
         products = Product.objects.filter(Q(product_name__icontains=query) | Q(shop__icontains=query))
-        # Fuzzy (Optional improvement via JavaScript or this backend loop)
         if not products.exists():
             choices = {p.id: p.product_name for p in Product.objects.all()}
             fuzzy_ids = [res[2] for res in process.extract(query, choices, scorer=fuzz.WRatio, limit=5) if res[1] > 60]
@@ -57,6 +55,47 @@ def dashboard(request):
     # 3. Recent History
     history = Transaction.objects.filter(type='SALES_CHECK').order_by('-date')[:10]
 
+    # 4. Shop profits by date range
+    range_start = _strict_date(request.GET.get('range_start'))
+    range_end = _strict_date(request.GET.get('range_end'))
+    if not range_start or not range_end or range_end < range_start:
+        range_start = today
+        range_end = today
+
+    shop_daily = (
+        DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
+        .values('date', 'shop')
+        .annotate(total_profit=Sum('profit'))
+        .order_by('date', 'shop')
+    )
+    profit_map = {}
+    for row in shop_daily:
+        d = row['date']
+        if d not in profit_map:
+            profit_map[d] = {}
+        profit_map[d][row['shop']] = float(row['total_profit'])
+
+    # Build list of dates and row data
+    dates_range = []
+    cur = range_start
+    while cur <= range_end:
+        dates_range.append(cur)
+        cur += timedelta(days=1)
+
+    shop_profits_table = []
+    totals = {s.replace(' ', '_'): 0.0 for s in SHOPS}
+    grand_total = 0.0
+    for d in dates_range:
+        row = {'date': d, 'day_total': 0.0}
+        for s in SHOPS:
+            val = profit_map.get(d, {}).get(s, 0.0)
+            key = s.replace(' ', '_')
+            row[key] = val
+            totals[key] += val
+            row['day_total'] += val
+        grand_total += row['day_total']
+        shop_profits_table.append(row)
+
     return render(request, 'tracker/dashboard.html', {
         'products': products,
         'total_profit': total_profit,
@@ -64,7 +103,13 @@ def dashboard(request):
         'today_profit': today_profit,
         'today_units': today_units,
         'history': history,
-        'query': query
+        'query': query,
+        'range_start': range_start,
+        'range_end': range_end,
+        'shop_profits_table': shop_profits_table,
+        'shop_totals': totals,
+        'shop_grand_total': grand_total,
+        'shops': SHOPS,
     })
 
 def views_product_detail(request, pk):
@@ -790,4 +835,67 @@ def daily_sales_report_export(request):
     )
     safe = period_label.replace('/', '-').replace(' ', '_').replace('→', 'to')
     response['Content-Disposition'] = f'attachment; filename="report_{safe}.xlsx"'
+    return response
+
+
+def dashboard_export(request):
+    """Export shop profits by date range to Excel."""
+    today = date.today()
+    range_start = _strict_date(request.GET.get('range_start')) or today
+    range_end = _strict_date(request.GET.get('range_end')) or today
+    if range_end < range_start:
+        range_start, range_end = range_end, range_start
+
+    sales = DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
+
+    # Aggregate by date and shop
+    shop_daily = (
+        sales.values('date', 'shop')
+        .annotate(total_profit=Sum('profit'))
+        .order_by('date', 'shop')
+    )
+    profit_map = {}
+    for row in shop_daily:
+        d = row['date']
+        if d not in profit_map:
+            profit_map[d] = {}
+        profit_map[d][row['shop']] = float(row['total_profit'])
+
+    # Build rows
+    columns = ['Date'] + SHOPS + ['Day Total']
+    rows = []
+    totals = {s: 0.0 for s in SHOPS}
+    grand_total = 0.0
+
+    cur = range_start
+    while cur <= range_end:
+        row_data = {'Date': cur}
+        day_total = 0.0
+        for s in SHOPS:
+            val = profit_map.get(cur, {}).get(s, 0.0)
+            row_data[s] = val
+            totals[s] += val
+            day_total += val
+        row_data['Day Total'] = day_total
+        grand_total += day_total
+        rows.append(row_data)
+        cur += timedelta(days=1)
+
+    # Add totals row
+    total_row = {'Date': 'TOTAL'}
+    for s in SHOPS:
+        total_row[s] = totals[s]
+    total_row['Day Total'] = grand_total
+    rows.append(total_row)
+
+    df = pd.DataFrame(rows, columns=columns)
+    buffer = BytesIO()
+    df.to_excel(buffer, index=False, sheet_name='Shop Profits')
+    buffer.seek(0)
+    response = HttpResponse(
+        buffer.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    safe_range = f"{range_start}_to_{range_end}"
+    response['Content-Disposition'] = f'attachment; filename="shop_profits_{safe_range}.xlsx"'
     return response

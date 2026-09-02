@@ -10,4 +10,5 @@ urlpatterns = [
     path('daily-sales/day-export/', views.daily_sales_day_export, name='daily_sales_day_export'),
     path('daily-sales/report/', views.daily_sales_report, name='daily_sales_report'),
     path('daily-sales/report/export/', views.daily_sales_report_export, name='daily_sales_report_export'),
+    path('dashboard/export/', views.dashboard_export, name='dashboard_export'),
 ]

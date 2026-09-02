@@ -65,6 +65,78 @@
             </form>
         </div>
 
+        <!-- Shop Profits by Date -->
+        <div class="card p-4 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0 fw-bold">Shop Profits by Date</h5>
+                <a href="{% url 'dashboard_export' %}?range_start={{ range_start|date:'Y-m-d' }}&range_end={{ range_end|date:'Y-m-d' }}" class="btn btn-success btn-sm">⬇ Download Excel</a>
+            </div>
+            <form method="GET" action="/" class="row g-2 mb-3">
+                <input type="hidden" name="q" value="{{ query }}">
+                <div class="col-auto">
+                    <label class="form-label small text-muted">From</label>
+                    <input type="date" name="range_start" class="form-control" value="{{ range_start|date:'Y-m-d' }}">
+                </div>
+                <div class="col-auto">
+                    <label class="form-label small text-muted">To</label>
+                    <input type="date" name="range_end" class="form-control" value="{{ range_end|date:'Y-m-d' }}">
+                </div>
+                <div class="col-auto d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                </div>
+                <div class="col-auto d-flex align-items-end">
+                    <a href="/" class="btn btn-outline-secondary">Reset</a>
+                </div>
+            </form>
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover align-middle mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Date</th>
+                            {% for s in shops %}
+                            <th class="text-end">{{ s }}</th>
+                            {% endfor %}
+                            <th class="text-end fw-bold">Day Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in shop_profits_table %}
+                        <tr>
+                            <td class="fw-semibold">{{ row.date|date:'D, d M Y' }}</td>
+                            <td class="text-end {% if row.Fig_Tree > 0 %}text-success{% elif row.Fig_Tree < 0 %}text-danger{% endif %}">
+                                {% if row.Fig_Tree != 0 %}KSh {{ row.Fig_Tree|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="text-end {% if row.Empire_Shop > 0 %}text-success{% elif row.Empire_Shop < 0 %}text-danger{% endif %}">
+                                {% if row.Empire_Shop != 0 %}KSh {{ row.Empire_Shop|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="text-end {% if row.Emirates > 0 %}text-success{% elif row.Emirates < 0 %}text-danger{% endif %}">
+                                {% if row.Emirates != 0 %}KSh {{ row.Emirates|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="text-end {% if row.Small_City > 0 %}text-success{% elif row.Small_City < 0 %}text-danger{% endif %}">
+                                {% if row.Small_City != 0 %}KSh {{ row.Small_City|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="text-end fw-bold">KSh {{ row.day_total|floatformat:2 }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="6" class="text-center py-4 text-muted">No data for this date range.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                    {% if shop_profits_table %}
+                    <tfoot class="table-light">
+                        <tr class="fw-bold">
+                            <td>TOTAL</td>
+                            <td class="text-end">KSh {{ shop_totals.Fig_Tree|floatformat:2 }}</td>
+                            <td class="text-end">KSh {{ shop_totals.Empire_Shop|floatformat:2 }}</td>
+                            <td class="text-end">KSh {{ shop_totals.Emirates|floatformat:2 }}</td>
+                            <td class="text-end">KSh {{ shop_totals.Small_City|floatformat:2 }}</td>
+                            <td class="text-end text-primary">KSh {{ shop_grand_total|floatformat:2 }}</td>
+                        </tr>
+                    </tfoot>
+                    {% endif %}
+                </table>
+            </div>
+        </div>
+
         <div class="row">
             <!-- Main Product Table -->
             <div class="col-12 col-lg-8">
