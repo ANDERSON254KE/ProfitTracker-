@@ -839,7 +839,7 @@ def daily_sales_report_export(request):
 
 
 def dashboard_export(request):
-    """Export shop profits by date range to Excel."""
+    """Export shop NET profits (after expenses) by date range to Excel."""
     today = date.today()
     range_start = _strict_date(request.GET.get('range_start')) or today
     range_end = _strict_date(request.GET.get('range_end')) or today
@@ -848,7 +848,7 @@ def dashboard_export(request):
 
     sales = DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
 
-    # Aggregate by date and shop
+    # Aggregate profit by date and shop
     shop_daily = (
         sales.values('date', 'shop')
         .annotate(total_profit=Sum('profit'))
@@ -861,11 +861,21 @@ def dashboard_export(request):
             profit_map[d] = {}
         profit_map[d][row['shop']] = float(row['total_profit'])
 
-    # Build rows
-    columns = ['Date'] + SHOPS + ['Day Total']
+    # Aggregate expenses by date and shop (from DayTotals)
+    exp_map = {}
+    day_exp = DayTotals.objects.filter(date__gte=range_start, date__lte=range_end)
+    for r in day_exp.values('date', 'shop', 'total_expenditure'):
+        d = r['date']
+        if d not in exp_map:
+            exp_map[d] = {}
+        exp_map[d][r['shop']] = float(r['total_expenditure'])
+
+    # Build rows: each value is NET profit (profit minus expenses)
+    columns = ['Date'] + SHOPS + ['Day Total (Net)']
     rows = []
     totals = {s: 0.0 for s in SHOPS}
     grand_total = 0.0
+    grand_expenses = 0.0
 
     cur = range_start
     while cur <= range_end:
@@ -873,29 +883,43 @@ def dashboard_export(request):
         day_total = 0.0
         for s in SHOPS:
             val = profit_map.get(cur, {}).get(s, 0.0)
-            row_data[s] = val
-            totals[s] += val
-            day_total += val
-        row_data['Day Total'] = day_total
+            exp = exp_map.get(cur, {}).get(s, 0.0)
+            net = val - exp
+            grand_expenses += exp
+            row_data[s] = net
+            totals[s] += net
+            day_total += net
+        row_data['Day Total (Net)'] = day_total
         grand_total += day_total
         rows.append(row_data)
         cur += timedelta(days=1)
 
     # Add totals row
-    total_row = {'Date': 'TOTAL'}
+    total_row = {'Date': 'TOTAL NET PROFIT'}
     for s in SHOPS:
         total_row[s] = totals[s]
-    total_row['Day Total'] = grand_total
+    total_row['Day Total (Net)'] = grand_total
     rows.append(total_row)
+
+    # Add expenses row for context
+    exp_totals = {s: 0.0 for s in SHOPS}
+    for d, shops in exp_map.items():
+        for s in SHOPS:
+            exp_totals[s] += shops.get(s, 0.0)
+    exp_row = {'Date': 'TOTAL EXPENSES'}
+    for s in SHOPS:
+        exp_row[s] = exp_totals[s]
+    exp_row['Day Total (Net)'] = grand_expenses
+    rows.append(exp_row)
 
     df = pd.DataFrame(rows, columns=columns)
     buffer = BytesIO()
-    df.to_excel(buffer, index=False, sheet_name='Shop Profits')
+    df.to_excel(buffer, index=False, sheet_name='Net Shop Profits')
     buffer.seek(0)
     response = HttpResponse(
         buffer.read(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     safe_range = f"{range_start}_to_{range_end}"
-    response['Content-Disposition'] = f'attachment; filename="shop_profits_{safe_range}.xlsx"'
+    response['Content-Disposition'] = f'attachment; filename="net_shop_profits_{safe_range}.xlsx"'
     return response
