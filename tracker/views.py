@@ -75,7 +75,16 @@ def dashboard(request):
             profit_map[d] = {}
         profit_map[d][row['shop']] = float(row['total_profit'])
 
-    # Build list of dates and row data
+    # Aggregate expenses by date and shop (from DayTotals)
+    exp_map = {}
+    day_exp = DayTotals.objects.filter(date__gte=range_start, date__lte=range_end)
+    for r in day_exp.values('date', 'shop', 'total_expenditure'):
+        d = r['date']
+        if d not in exp_map:
+            exp_map[d] = {}
+        exp_map[d][r['shop']] = float(r['total_expenditure'])
+
+    # Build list of dates and row data (NET = profit minus expenses)
     dates_range = []
     cur = range_start
     while cur <= range_end:
@@ -90,9 +99,11 @@ def dashboard(request):
         for s in SHOPS:
             val = profit_map.get(d, {}).get(s, 0.0)
             key = s.replace(' ', '_')
-            row[key] = val
-            totals[key] += val
-            row['day_total'] += val
+            exp = exp_map.get(d, {}).get(s, 0.0)
+            net = val - exp
+            row[key] = net
+            totals[key] += net
+            row['day_total'] += net
         grand_total += row['day_total']
         shop_profits_table.append(row)
 

@@ -21,3 +21,8 @@ Thumbs.db
 # IDEs
 .vscode/
 .idea/
+.claude/
+
+# Backup / debug files
+*.backup*.xlsx
+sync_debug.txt
