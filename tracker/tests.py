@@ -409,3 +409,107 @@ class ShopPricingTests(BaseDataTestCase):
         self.assertEqual(response.status_code, 403)
         card.refresh_from_db()
         self.assertEqual(card.cost_price, Decimal("450.00"))
+
+
+class DailySalesSheetTests(BaseDataTestCase):
+    """The one-submit daily entry sheet."""
+
+    SHEET = "daily_sales_sheet"
+
+    def test_sheet_renders_every_active_product(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse(self.SHEET))
+        self.assertEqual(response.status_code, 200)
+        names = {row["product"].name for row in response.context["rows"]}
+        self.assertIn("Gilbeys", names)
+        self.assertIn("Blue Ice", names)
+        self.assertNotIn("money in the form", response.content.decode())
+
+    def test_a_whole_day_saves_in_one_submit(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse(self.SHEET),
+            {
+                f"qty_{self.gilbeys.pk}": "4",
+                f"qty_{self.blue_ice.pk}": "10",
+            },
+        )
+        self.assertRedirects(response, reverse(self.SHEET))
+
+        gilbeys = DailySale.objects.get(product=self.gilbeys)
+        self.assertEqual(gilbeys.shop, self.fig_tree)
+        self.assertEqual(gilbeys.recorded_by, self.fig_manager)
+        # 4 x (550 - 450) = 400
+        self.assertEqual(gilbeys.units_sold, Decimal("4"))
+        self.assertEqual(gilbeys.profit, Decimal("400.00"))
+
+        blue_ice = DailySale.objects.get(product=self.blue_ice)
+        # 10 x (200 - 150) = 500
+        self.assertEqual(blue_ice.profit, Decimal("500.00"))
+
+    def test_a_second_submit_appends_instead_of_overwriting(self):
+        self.client.force_login(self.fig_manager)
+        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "2"})
+        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "3"})
+        # Append-only: two rows exist, never a silent replacement.
+        rows = list(DailySale.objects.filter(product=self.gilbeys, shop=self.fig_tree))
+        self.assertEqual(len(rows), 2)
+        total = sum((r.units_sold for r in rows), Decimal("0"))
+        self.assertEqual(total, Decimal("5"))
+
+    def test_blank_means_not_sold(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse(self.SHEET),
+            {f"qty_{self.gilbeys.pk}": "2", f"qty_{self.blue_ice.pk}": ""},
+        )
+        self.assertRedirects(response, reverse(self.SHEET))
+        self.assertEqual(DailySale.objects.count(), 1)
+
+    def test_a_product_the_shop_does_not_stock_is_rejected(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse(self.SHEET),
+            {f"qty_{self.gilbeys.pk}": "1", "qty_999999": "5"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(DailySale.objects.count(), 0)
+
+    def test_zero_or_bad_quantities_are_rejected(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "0"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(DailySale.objects.count(), 0)
+
+        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "abc"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(DailySale.objects.count(), 0)
+
+    def test_no_filled_rows_does_not_save(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": ""})
+        self.assertRedirects(response, reverse(self.SHEET))
+        self.assertEqual(DailySale.objects.count(), 0)
+
+    def test_day_totals_show_after_a_save(self):
+        self.client.force_login(self.fig_manager)
+        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "4"})
+        response = self.client.get(reverse(self.SHEET))
+        # 4 x (550 - 450) = 400 profit, 4 units, 1 recorded product.
+        self.assertEqual(response.context["day_profit"], Decimal("400.00"))
+        self.assertEqual(response.context["day_units"], Decimal("4"))
+        self.assertEqual(response.context["recorded_count"], 1)
+
+    def test_sheet_surfaces_the_missing_cost_warning(self):
+        ShopProduct.objects.filter(shop=self.fig_tree, product=self.blue_ice).update(
+            cost_price=Decimal("0.00")
+        )
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse(self.SHEET))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(r["cost"] <= 0 for r in response.context["rows"]))
+        self.assertContains(response, "no cost")
+
+    def test_owner_is_refused_when_they_have_no_shop(self):
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.get(reverse(self.SHEET)).status_code, 403)

@@ -11,6 +11,10 @@ from django import forms
 
 from .models import DailySale, MasterProduct, ShopProduct
 
+#: Upper bound on products in one sheet submission, so a crafted POST cannot ask
+#: the server to write an unbounded number of rows.
+MAX_SHEET_ROWS = 500
+
 
 class DailySaleForm(forms.ModelForm):
     """Record one product sale for a single shop.
@@ -107,6 +111,117 @@ class DailySaleForm(forms.ModelForm):
         if commit:
             instance.save()
         return instance
+
+
+class DailySalesSheetForm(forms.Form):
+    """Record a whole trading day for one shop in a single submit.
+
+    The manager types a quantity per product and leaves the rest blank. Only
+    quantities cross the wire: every price, and therefore every money figure, is
+    derived server-side by :meth:`tracker.models.DailySale.save`.
+
+    This is deliberately append-only. A submitted day is never rewritten -- to
+    add more sales later, submit again and the new quantities are inserted
+    alongside what is already recorded, so the audit trail of what was entered
+    when stays intact.
+    """
+
+    def __init__(self, *args, shop=None, **kwargs):
+        """Scope the sheet to ``shop``'s active range.
+
+        Args:
+            shop: the :class:`~tracker.models.Shop` being recorded for.
+        """
+        self.shop = shop
+        self.errors_by_product = {}
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        """Parse the posted quantities, ignoring blanks and non-numbers.
+
+        Products the shop cannot sell are rejected rather than silently dropped,
+        so a tampered POST cannot create a sale the shop is not stocked for.
+        """
+        cleaned = super().clean()
+        if self.shop is None:
+            return cleaned
+
+        stocked = {
+            (sp.product_id): sp
+            for sp in ShopProduct.objects.filter(shop=self.shop, is_active=True)
+        }
+        quantities = {}
+        for raw_key, raw_value in self.data.items():
+            if not raw_key.startswith("qty_"):
+                continue
+            try:
+                product_id = int(raw_key[4:])
+            except ValueError:
+                continue
+
+            if raw_value is None or not str(raw_value).strip():
+                continue  # blank means "not sold", which is the normal case
+
+            if product_id not in stocked:
+                self.add_error(None, "One of the products is not stocked by this shop.")
+                continue
+
+            try:
+                units = Decimal(str(raw_value).strip())
+            except (InvalidOperation, TypeError, ValueError):
+                self.add_error(
+                    None, f"{stocked[product_id].product}: enter a number, or leave it blank."
+                )
+                continue
+
+            if units <= 0:
+                self.add_error(
+                    None,
+                    f"{stocked[product_id].product}: quantity must be greater than zero.",
+                )
+                continue
+
+            if len(quantities) >= MAX_SHEET_ROWS:
+                self.add_error(None, "Too many products in one submission.")
+                break
+
+            quantities[product_id] = units
+
+        cleaned["quantities"] = quantities
+        return cleaned
+
+    def save(self, recorder):
+        """Create one :class:`~tracker.models.DailySale` per entered quantity.
+
+        Prices are left unset on purpose so ``DailySale.save()`` locks them from
+        the shop's price card and computes the money fields itself.
+
+        Args:
+            recorder: the :class:`~tracker.models.CustomUser` submitting the day.
+
+        Returns:
+            The list of created sales, in the order they were entered.
+        """
+        quantities = self.cleaned_data.get("quantities") or {}
+        if not quantities:
+            return []
+
+        sales = [
+            DailySale(
+                shop=self.shop,
+                product_id=product_id,
+                units_sold=units,
+                recorded_by=recorder,
+            )
+            for product_id, units in quantities.items()
+        ]
+        # save() per row (not bulk_create) so the model computes each sale's
+        # revenue, cost and profit from the current price card.
+        for sale in sales:
+            sale.save()
+
+        self.errors_by_product = {}
+        return sales
 
 
 class ShopPricingForm(forms.Form):

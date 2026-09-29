@@ -25,7 +25,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.generic import CreateView, RedirectView, TemplateView, View
 
-from .forms import DailySaleForm, ShopPricingForm
+from .forms import DailySaleForm, DailySalesSheetForm, ShopPricingForm
 from .mixins import (
     LoginRequiredMixin,
     ManagerRequiredMixin,
@@ -206,7 +206,7 @@ class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
         context["total_units"] = _money(lifetime["units"])
 
         context["recent_sales"] = sales.order_by("-sale_date", "-id")[:MANAGER_HISTORY_ROWS]
-        context["sale_form_url"] = reverse("daily_sale_create")
+        context["sale_form_url"] = reverse("daily_sales_sheet")
         return context
 
 
@@ -244,6 +244,106 @@ class DailySaleCreateView(LoginRequiredMixin, ManagerShopAccessMixin, CreateView
     def get_success_url(self) -> str:
         """Return to the manager's dashboard after saving."""
         return f"{reverse('manager_dashboard')}?recorded=1"
+
+
+class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, TemplateView):
+    """Record a whole trading day for the manager's shop in one submit.
+
+    ``GET`` lists every active product in the shop's range with a quantity box
+    and a live profit preview; ``POST`` writes one
+    :class:`~tracker.models.DailySale` per quantity that was filled in.
+
+    Entry is append-only: submitting again adds to the day rather than
+    replacing it, and no route exists to edit or delete a recorded sale.
+    """
+
+    template_name = "tracker/daily_sales_sheet.html"
+
+    def _build_context(self):
+        """Gather the sheet rows and the day's recorded totals."""
+        shop = self.shop
+        today = timezone.localdate()
+
+        price_card = list(
+            ShopProduct.objects.filter(shop=shop, is_active=True)
+            .select_related("product")
+            .order_by("product__name", "product__category")
+        )
+
+        already = list(
+            DailySale.objects.filter(shop=shop, sale_date=today).select_related("product")
+        )
+        recorded_by_product = {}
+        for sale in already:
+            units, profit = recorded_by_product.get(sale.product_id, (None, None))
+            recorded_by_product[sale.product_id] = (
+                (units or 0) + sale.units_sold,
+                (profit or Decimal("0.00")) + sale.profit,
+            )
+
+        rows = []
+        for card in price_card:
+            product = card.product
+            recorded_units, recorded_profit = recorded_by_product.get(
+                product.pk, (None, None)
+            )
+            rows.append(
+                {
+                    "product": product,
+                    "cost": card.cost_price,
+                    "price": card.selling_price,
+                    "recorded_units": recorded_units,
+                    "recorded_profit": recorded_profit,
+                }
+            )
+
+        day = DailySale.objects.filter(shop=shop, sale_date=today).aggregate(
+            revenue=Sum("total_revenue"),
+            cost=Sum("total_cost"),
+            profit=Sum("profit"),
+            units=Sum("units_sold"),
+        )
+
+        return {
+            "shop": shop,
+            "today": today,
+            "rows": rows,
+            "has_products": bool(rows),
+            "missing_cost_rows": [r for r in rows if r["cost"] <= 0],
+            "day_revenue": _money(day["revenue"]),
+            "day_cost": _money(day["cost"]),
+            "day_profit": _money(day["profit"]),
+            "day_units": _money(day["units"]),
+            "recorded_count": len(already),
+        }
+
+    def get(self, request, *args, **kwargs):
+        """Render the sheet, pre-filled with what has already been recorded."""
+        return self.render_to_response(self._build_context())
+
+    def post(self, request, *args, **kwargs):
+        """Save every filled-in quantity, then show the day's running totals."""
+        form = DailySalesSheetForm(request.POST, shop=self.shop)
+        context = self._build_context()
+        if not form.is_valid():
+            context["form_errors"] = form.non_field_errors()
+            return self.render_to_response(context, status=400)
+
+        sales = form.save(request.user)
+        if not sales:
+            messages.warning(
+                request, "Nothing was entered. Fill in a quantity for the products sold."
+            )
+            return redirect("daily_sales_sheet")
+
+        units = sum((s.units_sold for s in sales), Decimal("0.00"))
+        profit = sum((s.profit for s in sales), Decimal("0.00"))
+        messages.success(
+            request,
+            f"Saved {len(sales)} product(s), {units.normalize():f} unit(s) for "
+            f"{self.shop.name}. Profit so far today: {CURRENCY} {profit:,.2f}.",
+        )
+        return redirect("daily_sales_sheet")
 
 
 class ShopPricingView(OwnerRequiredMixin, View):
