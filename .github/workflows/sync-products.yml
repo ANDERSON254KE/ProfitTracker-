@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "price list.xlsx"
-      - "tracker/management/commands/sync_products.py"
+      - "tracker/management/commands/import_price_list.py"
   schedule:
     - cron: "0 0 * * *"   # daily at midnight UTC
   workflow_dispatch:
@@ -23,12 +23,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # USE_DATABASE_URL opts in to the hosted database; without it local runs
+      # deliberately stay on SQLite (see profit_tracker_pro/settings.py).
       - name: Apply database migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          USE_DATABASE_URL: 'True'
         run: python manage.py migrate
 
       - name: Sync products to database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python manage.py sync_products
+          USE_DATABASE_URL: 'True'
+        run: python manage.py import_price_list

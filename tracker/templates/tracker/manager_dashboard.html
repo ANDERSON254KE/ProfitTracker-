@@ -1,0 +1,94 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}{{ shop.name|default:"My Shop" }} · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">{{ shop.name|default:"No shop assigned" }}</h1>
+        <p class="text-sm text-slate-500">{{ today|date:"l, d F Y" }}</p>
+    </div>
+    {% if has_shop %}
+        <a href="{{ sale_form_url }}"
+           class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+            + Record New Sale
+        </a>
+    {% endif %}
+</div>
+
+{% if not has_shop %}
+    <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
+        Your account has no shop assigned yet. Ask the owner to assign you to a shop so you can start recording sales.
+    </div>
+{% else %}
+
+    {# ---- Summary cards ---- #}
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div class="rounded-xl bg-white p-5 shadow">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Today's Profit</p>
+            <p class="mt-2 text-3xl font-bold {% if today_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                {{ today_profit|ksh }}
+            </p>
+            <p class="mt-1 text-xs text-slate-400">{{ today_units|units }} unit(s) today</p>
+        </div>
+        <div class="rounded-xl bg-white p-5 shadow">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Net Profit</p>
+            <p class="mt-2 text-3xl font-bold {% if total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                {{ total_profit|ksh }}
+            </p>
+            <p class="mt-1 text-xs text-slate-400">All time, {{ shop.name }}</p>
+        </div>
+        <div class="rounded-xl bg-white p-5 shadow">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Units</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900">{{ total_units|units }}</p>
+            <p class="mt-1 text-xs text-slate-400">All time, {{ shop.name }}</p>
+        </div>
+    </div>
+
+    {# ---- Recent sales ---- #}
+    <div class="mt-6 rounded-xl bg-white shadow">
+        <div class="border-b border-slate-200 px-5 py-4">
+            <h2 class="text-base font-semibold text-slate-900">Recent sales</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-5 py-3 text-left font-semibold">Date</th>
+                        <th class="px-5 py-3 text-left font-semibold">Product</th>
+                        <th class="px-5 py-3 text-right font-semibold">Units</th>
+                        <th class="px-5 py-3 text-right font-semibold">Price</th>
+                        <th class="px-5 py-3 text-right font-semibold">Cost</th>
+                        <th class="px-5 py-3 text-right font-semibold">Revenue</th>
+                        <th class="px-5 py-3 text-right font-semibold">Profit</th>
+                        <th class="px-5 py-3 text-left font-semibold">Recorded by</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for sale in recent_sales %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="whitespace-nowrap px-5 py-3 text-slate-700">{{ sale.sale_date|date:"d M Y" }}</td>
+                            <td class="px-5 py-3 font-medium text-slate-900">{{ sale.product }}</td>
+                            <td class="px-5 py-3 text-right text-slate-700">{{ sale.units_sold|units }}</td>
+                            <td class="px-5 py-3 text-right text-slate-500">{{ sale.unit_price_at_sale|ksh }}</td>
+                            <td class="px-5 py-3 text-right text-slate-500">{{ sale.unit_cost_at_sale|ksh }}</td>
+                            <td class="px-5 py-3 text-right text-slate-700">{{ sale.total_revenue|ksh }}</td>
+                            <td class="px-5 py-3 text-right font-semibold {% if sale.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                                {{ sale.profit|ksh }}
+                            </td>
+                            <td class="px-5 py-3 text-slate-500">{{ sale.recorded_by.username }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="8" class="px-5 py-6 text-center text-slate-500">
+                                No sales recorded yet. Use “Record New Sale” to add the first one.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}

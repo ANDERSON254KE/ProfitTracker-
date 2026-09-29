@@ -1,0 +1,165 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}Record Sale · {{ shop.name }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl">
+    <div class="mb-6 flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Record a sale</h1>
+            <p class="text-sm text-slate-500">{{ shop.name }}</p>
+        </div>
+        <a href="{% url 'manager_dashboard' %}"
+           class="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-300">
+            Back to dashboard
+        </a>
+    </div>
+
+    <div class="rounded-xl bg-white p-6 shadow">
+        <form method="post" id="sale-form" class="space-y-5">
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+                <div class="rounded-lg bg-rose-100 px-4 py-3 text-sm text-rose-800">
+                    {{ form.non_field_errors|striptags }}
+                </div>
+            {% endif %}
+
+            <div>
+                <label for="id_product" class="block text-sm font-medium text-slate-700">Product</label>
+                {{ form.product }}
+                {% if form.product.errors %}
+                    <p class="mt-1 text-xs text-rose-600">{{ form.product.errors|striptags }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <label for="id_units_sold" class="block text-sm font-medium text-slate-700">Units sold</label>
+                {{ form.units_sold }}
+                {% if form.units_sold.errors %}
+                    <p class="mt-1 text-xs text-rose-600">{{ form.units_sold.errors|striptags }}</p>
+                {% endif %}
+            </div>
+
+            <div id="preview" class="hidden rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Live preview</p>
+                <dl class="mt-2 grid grid-cols-3 gap-3 text-sm">
+                    <div>
+                        <dt class="text-slate-500">Revenue</dt>
+                        <dd id="preview-revenue" class="font-semibold text-slate-900">—</dd>
+                    </div>
+                    <div>
+                        <dt class="text-slate-500">Cost</dt>
+                        <dd id="preview-cost" class="font-semibold text-slate-900">—</dd>
+                    </div>
+                    <div>
+                        <dt class="text-slate-500">Profit</dt>
+                        <dd id="preview-profit" class="font-semibold text-emerald-600">—</dd>
+                    </div>
+                </dl>
+                <p class="mt-2 text-xs text-slate-400">
+                    Preview only — the final figures are recalculated on the server when you save.
+                </p>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <button type="submit"
+                        class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Save sale
+                </button>
+                <span id="preview-hint" class="text-sm text-slate-500">Select a product to see the profit preview.</span>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    "use strict";
+
+    const PRICE_URL = "{% url 'shop_product_price' 0 %}";   // 0 is replaced per product
+    const productEl = document.getElementById("id_product");
+    const unitsEl = document.getElementById("id_units_sold");
+    const preview = document.getElementById("preview");
+    const revenueEl = document.getElementById("preview-revenue");
+    const costEl = document.getElementById("preview-cost");
+    const profitEl = document.getElementById("preview-profit");
+    const hintEl = document.getElementById("preview-hint");
+
+    // Prices fetched for the currently selected product, so the preview can be
+    // recomputed instantly while the user types without another request.
+    let prices = null;
+
+    const formatKsh = function (value) {
+        return "KSh " + Number(value || 0).toLocaleString("en-KE", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    };
+
+    const showHint = function (text) {
+        preview.classList.add("hidden");
+        hintEl.textContent = text;
+        hintEl.classList.remove("hidden");
+    };
+
+    const renderPreview = function () {
+        if (!prices) {
+            showHint("Select a product to see the profit preview.");
+            return;
+        }
+        const units = parseFloat(unitsEl.value);
+        if (!isFinite(units) || units <= 0) {
+            showHint("Enter how many units were sold to see the profit preview.");
+            return;
+        }
+        const revenue = prices.selling_price * units;
+        const cost = prices.cost_price * units;
+        const profit = revenue - cost;
+
+        revenueEl.textContent = formatKsh(revenue);
+        costEl.textContent = formatKsh(cost);
+        profitEl.textContent = formatKsh(profit);
+        profitEl.className = "font-semibold " + (profit < 0 ? "text-rose-600" : "text-emerald-600");
+
+        hintEl.classList.add("hidden");
+        preview.classList.remove("hidden");
+    };
+
+    const loadPrices = function () {
+        const productId = productEl.value;
+        if (!productId) {
+            prices = null;
+            showHint("Select a product to see the profit preview.");
+            return;
+        }
+        const url = PRICE_URL.replace("/0/", "/" + productId + "/");
+        fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+            .then(function (response) {
+                if (!response.ok) { throw new Error("Could not load prices."); }
+                return response.json();
+            })
+            .then(function (data) {
+                prices = {
+                    cost_price: parseFloat(data.cost_price),
+                    selling_price: parseFloat(data.selling_price)
+                };
+                renderPreview();
+            })
+            .catch(function () {
+                prices = null;
+                showHint("Could not load this product's prices. You can still save the sale.");
+            });
+    };
+
+    productEl.addEventListener("change", loadPrices);
+    unitsEl.addEventListener("input", renderPreview);
+
+    // Prefill when the page is re-rendered with a selection already made.
+    if (productEl.value) { loadPrices(); }
+})();
+</script>
+{% endblock %}
