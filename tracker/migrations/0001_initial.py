@@ -37,6 +37,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import connection, migrations, models
+from django.db.models import Case, DateField, Value, When
 
 #: Old table name -> new "aside" name used during the upgrade.
 LEGACY_TABLES = {
@@ -112,6 +113,75 @@ def rename_legacy_tables(apps, schema_editor):
         _rename_sequences_for(old_name, new_name)
 
 
+#: Columns copied from the old ``auth_user`` table.
+AUTH_USER_COLUMNS = (
+    "id, username, password, last_login, is_superuser, first_name, last_name, "
+    "email, is_staff, is_active, date_joined"
+)
+
+
+def _fetch_ids(table, column, where_column, value):
+    """Return the ids in ``table``'s ``column`` for one legacy user."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT {_quote(column)} FROM {_quote(table)} "
+            f"WHERE {_quote(where_column)} = %s",
+            [value],
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+
+def import_legacy_users(apps, schema_editor):
+    """Carry the existing ``auth_user`` rows over to the new user model.
+
+    Swapping ``AUTH_USER_MODEL`` leaves ``auth_user`` orphaned, so without this
+    step nobody who could sign in before the upgrade could sign in after it.
+    Password hashes are copied verbatim, so current credentials keep working.
+    Superusers become OWNERs, everyone else a MANAGER with no shop assigned.
+
+    ``auth_user`` is read with plain SQL on purpose: once the model is swapped,
+    ``apps.get_model("auth", "User")`` returns the swapped-out model, which has
+    no manager.
+    """
+    if not _table_exists("auth_user"):
+        return
+
+    CustomUser = apps.get_model("tracker", "CustomUser")
+    Group = apps.get_model("auth", "Group")
+    Permission = apps.get_model("auth", "Permission")
+
+    for row in _fetch("auth_user", AUTH_USER_COLUMNS):
+        user, created = CustomUser.objects.get_or_create(
+            username=row["username"],
+            defaults={
+                "password": row["password"],
+                "last_login": row["last_login"],
+                "is_superuser": row["is_superuser"],
+                "first_name": row["first_name"] or "",
+                "last_name": row["last_name"] or "",
+                "email": row["email"] or "",
+                "is_staff": row["is_staff"],
+                "is_active": row["is_active"],
+                "date_joined": row["date_joined"],
+                "role": "OWNER" if row["is_superuser"] else "MANAGER",
+                "assigned_shop": None,
+            },
+        )
+        if not created:
+            # Already migrated by an earlier attempt; keep the stored password.
+            continue
+
+        groups = _fetch_ids("auth_user_groups", "group_id", "user_id", row["id"])
+        if groups:
+            user.groups.set(Group.objects.filter(pk__in=groups))
+
+        permissions = _fetch_ids(
+            "auth_user_user_permissions", "permission_id", "user_id", row["id"]
+        )
+        if permissions:
+            user.user_permissions.set(Permission.objects.filter(pk__in=permissions))
+
+
 def import_legacy_data(apps, schema_editor):
     """Copy legacy products, pricing and sales into the new schema.
 
@@ -141,14 +211,43 @@ def import_legacy_data(apps, schema_editor):
         defaults={"role": "MANAGER", "is_active": False},
     )
 
+    # Everything below is written in bulk on purpose. A per-row
+    # get_or_create/update_or_create costs several round trips each, and against
+    # a remote host 452 price rows turn into a ten minute transaction.
+    legacy_products = _fetch(
+        "legacy_product", "id, product_name, category, cost_price, selling_price"
+    )
+
+    # Products: one INSERT, then one SELECT to read the ids back. The
+    # (name, category) key mirrors what get_or_create would have matched.
+    MasterProduct.objects.bulk_create(
+        [
+            MasterProduct(
+                name=(row["product_name"] or "").strip(),
+                category=(row["category"] or "").strip(),
+            )
+            for row in legacy_products
+            if (row["product_name"] or "").strip()
+        ],
+        ignore_conflicts=True,
+        batch_size=500,
+    )
+    key_to_master_id = {
+        (master.name, master.category): master.pk
+        for master in MasterProduct.objects.all()
+    }
+
     master_by_legacy_id = {}
-    for row in _fetch("legacy_product", "id, product_name, category, cost_price, selling_price"):
+    legacy_prices = {}
+    for row in legacy_products:
         name = (row["product_name"] or "").strip()
         if not name:
             continue
-        category = (row["category"] or "").strip()
-        master, _ = MasterProduct.objects.get_or_create(name=name, category=category)
-        master_by_legacy_id[row["id"]] = master.pk
+        master_id = key_to_master_id.get((name, (row["category"] or "").strip()))
+        if master_id is None:
+            continue
+        master_by_legacy_id[row["id"]] = master_id
+        legacy_prices[row["id"]] = (row["cost_price"], row["selling_price"])
 
     # Per-shop selling-price overrides, keyed by (legacy product id, shop).
     overrides = {}
@@ -157,24 +256,22 @@ def import_legacy_data(apps, schema_editor):
             overrides[(row["product_id"], (row["shop"] or "").strip())] = row["selling_price"]
 
     # Price every product in every shop, using the override where the old app
-    # had one so branch-specific prices survive.
-    legacy_prices = {
-        row["id"]: (row["cost_price"], row["selling_price"])
-        for row in _fetch("legacy_product", "id, cost_price, selling_price")
-    }
+    # had one so branch-specific prices survive. The table was created moments
+    # ago in this same transaction, so conflicts only arise on a retried run.
+    prices = []
     for legacy_id, master_id in master_by_legacy_id.items():
         base_cost, base_sell = legacy_prices.get(legacy_id, (Decimal("0.00"), Decimal("0.00")))
         for shop_name, shop in shops.items():
-            selling = overrides.get((legacy_id, shop_name), base_sell)
-            ShopProduct.objects.update_or_create(
-                shop_id=shop.pk,
-                product_id=master_id,
-                defaults={
-                    "cost_price": base_cost,
-                    "selling_price": selling,
-                    "is_active": True,
-                },
+            prices.append(
+                ShopProduct(
+                    shop_id=shop.pk,
+                    product_id=master_id,
+                    cost_price=base_cost,
+                    selling_price=overrides.get((legacy_id, shop_name), base_sell),
+                    is_active=True,
+                )
             )
+    ShopProduct.objects.bulk_create(prices, ignore_conflicts=True, batch_size=1000)
 
     if not _table_exists("legacy_dailysale"):
         return
@@ -227,32 +324,67 @@ def import_legacy_data(apps, schema_editor):
 
     created = DailySale.objects.bulk_create(pending, batch_size=500)
 
-    # Restore the original dates, one query per distinct day.
+    # Restore the original dates. One UPDATE for the whole batch, rather than one
+    # per distinct day, which would be ~40 round trips on a remote host.
     by_date = {}
     for sale in created:
-        by_date.setdefault(sale._legacy_date, []).append(sale.pk)
-    for day, pks in by_date.items():
-        if day is None:
-            continue
-        DailySale.objects.filter(pk__in=pks).update(sale_date=day)
+        if sale._legacy_date is not None:
+            by_date.setdefault(sale._legacy_date, []).append(sale.pk)
+    if by_date:
+        DailySale.objects.filter(pk__in=[pk for pks in by_date.values() for pk in pks]).update(
+            sale_date=Case(
+                *[When(pk__in=pks, then=Value(day)) for day, pks in by_date.items()],
+                output_field=DateField(),
+            )
+        )
+
+
+#: Legacy tables whose contents the new schema carries, in the order they can
+#: safely be dropped: children first, because the old app used real foreign keys.
+IMPORTED_TABLES = [
+    "legacy_dailysale",
+    "legacy_productshopprice",
+    "legacy_product",
+]
+
+#: Legacy tables the new schema has no equivalent for. They are moved aside and
+#: deliberately *kept*, so the upgrade does not silently discard data.
+UNMAPPED_TABLES = [
+    "legacy_dailyexpense",
+    "legacy_transaction",
+    "legacy_daytotals",
+]
 
 
 def drop_legacy_tables(apps, schema_editor):
-    """Remove the moved-aside tables now that their contents have been copied."""
-    for new_name in LEGACY_TABLES.values():
-        if not _table_exists(new_name):
+    """Remove the moved-aside tables that were copied into the new schema.
+
+    ``legacy_dailyexpense`` (shop expenses), ``legacy_transaction`` (restock and
+    stock-check audit rows) and ``legacy_daytotals`` (cached daily summaries) have
+    no model in the new schema, so they are left in place rather than dropped.
+    Drop them by hand once you are certain you do not need them.
+    """
+    for name in IMPORTED_TABLES:
+        if not _table_exists(name):
             continue
         with connection.cursor() as cursor:
-            cursor.execute(f"DROP TABLE {_quote(new_name)}")
+            if connection.vendor == "postgresql":
+                # legacy_transaction still references legacy_product. CASCADE
+                # drops that constraint (and any dependent view) without
+                # touching the rows of the tables being left behind.
+                cursor.execute(f"DROP TABLE {_quote(name)} CASCADE")
+            else:
+                cursor.execute(f"DROP TABLE {_quote(name)}")
 
 
 def _fetch(table, columns):
     """Yield the rows of ``table`` as dicts, or nothing if it does not exist."""
     if not _table_exists(table):
         return []
+    names = [c.strip() for c in columns.split(",")]
+    selected = ", ".join(_quote(name) for name in names)
     with connection.cursor() as cursor:
-        cursor.execute(f"SELECT {columns} FROM {_quote(table)}")
-        names = [c.strip() for c in columns.split(",")]
+        cursor.execute(f"SELECT {selected} FROM {_quote(table)}")
         return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
@@ -360,6 +492,7 @@ class Migration(migrations.Migration):
                 "constraints": [models.UniqueConstraint(fields=("shop", "product"), name="unique_product_per_shop")],
             },
         ),
+        migrations.RunPython(import_legacy_users, migrations.RunPython.noop),
         migrations.RunPython(import_legacy_data, migrations.RunPython.noop),
         migrations.RunPython(drop_legacy_tables, migrations.RunPython.noop),
     ]
