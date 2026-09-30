@@ -7,9 +7,11 @@ The domain is deliberately split in three:
 * :class:`ShopProduct` is the per-branch price card. The same product is sold
   at a different cost/selling price in every shop, so prices live here and
   never on the master record.
-* :class:`DailySale` is a single sale line. It copies (locks in) the prices
-  from the :class:`ShopProduct` row it was sold at, so that later price edits
-  never rewrite history. Revenue, cost and profit are computed server side in
+* :class:`DailySale` is one product's figures for one day. It copies (locks
+  in) the prices from the :class:`ShopProduct` row it was sold at, so that
+  later price edits never rewrite history. Rows written by the daily sheet
+  carry the stock trail (opening -> additional -> total -> closing) and their
+  units sold, revenue, cost and profit are computed server side in
   :meth:`DailySale.save` -- they are never accepted from a client.
 """
 
@@ -23,6 +25,25 @@ from django.utils import timezone
 
 #: Every monetary amount is a non-negative two-decimal KSh value.
 MONEY_VALIDATORS = [MinValueValidator(Decimal("0.00"))]
+
+
+class LocalDateField(models.DateField):
+    """DateField whose ``auto_now``/``auto_now_add`` use Django's timezone.
+
+    Django's stock implementation stamps ``datetime.date.today()`` -- the
+    server OS clock. On a UTC host serving Nairobi those disagree between
+    00:00 and 03:00 local time, so a sale recorded just after midnight would
+    be filed under the previous day and disappear from "today". Writing
+    :func:`django.utils.timezone.localdate` keeps the column in step with
+    every view, which filters on the same function.
+    """
+
+    def pre_save(self, model_instance, add):
+        if self.auto_now or (self.auto_now_add and add):
+            value = timezone.localdate()
+            setattr(model_instance, self.attname, value)
+            return value
+        return super().pre_save(model_instance, add)
 
 
 class CustomUser(AbstractUser):
@@ -152,23 +173,68 @@ class ShopProduct(models.Model):
 
 
 class DailySale(models.Model):
-    """One product sold on one day at one shop.
+    """One product's stock movement (and therefore sales) for one day.
 
     ``unit_cost_at_sale`` and ``unit_price_at_sale`` are locked in at the
-    moment of the sale so that editing a shop's price card later never changes
-    a profit figure that has already been reported.
+    moment of the sale so that editing a shop's price card later changes
+    nothing that has already been reported.
+
+    Two kinds of row live here:
+
+    * **Stock entry** (``total_stock`` is set) -- produced by the daily sheet.
+      The manager enters additional stock, total stock and closing stock;
+      opening stock is copied from the previous day's closing stock and
+      ``units_sold`` is derived as ``total_stock - closing_stock``. Revenue,
+      cost and profit then follow from the locked-in prices as usual.
+    * **Plain entry** (``total_stock`` is NULL) -- written by the single-product
+      sale form, where ``units_sold`` is supplied directly.
     """
 
     shop = models.ForeignKey(Shop, on_delete=models.PROTECT, related_name="sales")
     product = models.ForeignKey(
         MasterProduct, on_delete=models.PROTECT, related_name="daily_sales"
     )
-    sale_date = models.DateField("Sale Date", auto_now_add=True, db_index=True)
+    sale_date = LocalDateField("Sale Date", auto_now_add=True, db_index=True)
     units_sold = models.DecimalField(
         "Units Sold",
         max_digits=12,
         decimal_places=2,
-        validators=[MinValueValidator(Decimal("0.01"))],
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
+    #: Stock trail. ``opening_stock`` is a snapshot of the previous day's
+    #: closing stock; ``units_sold`` for these rows is derived from the other
+    #: three, never posted by the browser.
+    opening_stock = models.DecimalField(
+        "Opening Stock",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=MONEY_VALIDATORS,
+    )
+    additional_stock = models.DecimalField(
+        "Additional Stock",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=MONEY_VALIDATORS,
+    )
+    total_stock = models.DecimalField(
+        "Total Stock",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=MONEY_VALIDATORS,
+    )
+    closing_stock = models.DecimalField(
+        "Closing Stock",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=MONEY_VALIDATORS,
     )
     unit_cost_at_sale = models.DecimalField(
         "Unit Cost at Sale", max_digits=12, decimal_places=2
@@ -197,12 +263,25 @@ class DailySale(models.Model):
         ordering = ["-sale_date", "-id"]
         indexes = [models.Index(fields=["shop", "-sale_date"], name="dailysale_shop_date_idx")]
 
+    @property
+    def is_stock_entry(self) -> bool:
+        """Return ``True`` when this row came from the stock-based sheet."""
+        return self.total_stock is not None
+
+    @property
+    def units_from_stock(self) -> Decimal:
+        """Units sold implied by the stock figures (total - closing)."""
+        return (
+            Decimal(self.total_stock or 0) - Decimal(self.closing_stock or 0)
+        ).quantize(Decimal("0.01"))
+
     def clean(self) -> None:
         """Lock the sale's prices to the shop's current price card.
 
         Raises:
-            ValidationError: if the shop does not stock the product, or has it
-                marked inactive.
+            ValidationError: if the shop does not stock the product, the product
+                is inactive, or a stock entry's closing stock exceeds its
+                total stock.
         """
         if not self.shop_id or not self.product_id:
             return
@@ -222,6 +301,17 @@ class DailySale(models.Model):
         self.unit_cost_at_sale = shop_product.cost_price
         self.unit_price_at_sale = shop_product.selling_price
 
+        if self.is_stock_entry:
+            # Physical stock can never imply a negative number of sales.
+            if self.closing_stock is None or self.total_stock is None:
+                raise ValidationError(
+                    "A stock entry needs both total stock and closing stock."
+                )
+            if self.closing_stock > self.total_stock:
+                raise ValidationError(
+                    "Closing stock cannot be greater than total stock."
+                )
+
     def save(self, *args, **kwargs) -> None:
         """Lock in prices if missing, then compute revenue, cost and profit.
 
@@ -235,6 +325,16 @@ class DailySale(models.Model):
             if shop_product is not None:
                 self.unit_cost_at_sale = shop_product.cost_price
                 self.unit_price_at_sale = shop_product.selling_price
+
+        # A stock entry derives its sales figure from the physical count:
+        # units sold = total stock - closing stock. Never taken from a client.
+        if self.is_stock_entry:
+            derived = self.units_from_stock
+            if derived < 0:
+                raise ValidationError(
+                    "Closing stock cannot be greater than total stock."
+                )
+            self.units_sold = derived
 
         units = Decimal(self.units_sold or 0)
         cost = Decimal(self.unit_cost_at_sale or 0)

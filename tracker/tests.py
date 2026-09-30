@@ -5,12 +5,20 @@ Run with::
     python manage.py test tracker
 """
 
+import os
+import tempfile
+from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
+
+import openpyxl
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from tracker.models import DailySale, MasterProduct, Shop, ShopProduct
 from tracker.templatetags.money import ksh, signed_ksh, units
@@ -412,9 +420,30 @@ class ShopPricingTests(BaseDataTestCase):
 
 
 class DailySalesSheetTests(BaseDataTestCase):
-    """The one-submit daily entry sheet."""
+    """The one-submit daily stock sheet.
+
+    Opening stock comes from the previous day's closing stock; the manager
+    enters additional/total/closing stock and units sold, amount and profit
+    are derived server side. Re-submitting the day updates it.
+    """
 
     SHEET = "daily_sales_sheet"
+
+    @staticmethod
+    def stock(product, additional="", total="", closing=""):
+        """Build the POST fields for one product's stock row."""
+        return {
+            f"add_{product.pk}": additional,
+            f"total_{product.pk}": total,
+            f"close_{product.pk}": closing,
+        }
+
+    def post_stock(self, *rows):
+        """POST stock rows for ``(product, figures)`` pairs."""
+        payload = {}
+        for product, figures in rows:
+            payload.update(self.stock(product, **figures))
+        return self.client.post(reverse(self.SHEET), payload)
 
     def test_sheet_renders_every_active_product(self):
         self.client.force_login(self.fig_manager)
@@ -424,92 +453,354 @@ class DailySalesSheetTests(BaseDataTestCase):
         self.assertIn("Gilbeys", names)
         self.assertIn("Blue Ice", names)
         self.assertNotIn("money in the form", response.content.decode())
+        # The stock boxes are present for each product.
+        self.assertContains(response, f'name="total_{self.gilbeys.pk}"')
+        self.assertContains(response, f'name="close_{self.gilbeys.pk}"')
 
     def test_a_whole_day_saves_in_one_submit(self):
         self.client.force_login(self.fig_manager)
-        response = self.client.post(
-            reverse(self.SHEET),
-            {
-                f"qty_{self.gilbeys.pk}": "4",
-                f"qty_{self.blue_ice.pk}": "10",
-            },
+        response = self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"}),
+            (self.blue_ice, {"additional": "10", "total": "10", "closing": "0"}),
         )
         self.assertRedirects(response, reverse(self.SHEET))
 
         gilbeys = DailySale.objects.get(product=self.gilbeys)
         self.assertEqual(gilbeys.shop, self.fig_tree)
         self.assertEqual(gilbeys.recorded_by, self.fig_manager)
-        # 4 x (550 - 450) = 400
-        self.assertEqual(gilbeys.units_sold, Decimal("4"))
+        self.assertTrue(gilbeys.is_stock_entry)
+        self.assertEqual(gilbeys.additional_stock, Decimal("10"))
+        # Sold = total stock - closing stock = 10 - 6 = 4.
+        self.assertEqual(gilbeys.units_sold, Decimal("4.00"))
+        # Amount = 4 x 550 selling price, profit = 4 x (550 - 450).
+        self.assertEqual(gilbeys.total_revenue, Decimal("2200.00"))
         self.assertEqual(gilbeys.profit, Decimal("400.00"))
 
         blue_ice = DailySale.objects.get(product=self.blue_ice)
         # 10 x (200 - 150) = 500
+        self.assertEqual(blue_ice.units_sold, Decimal("10.00"))
         self.assertEqual(blue_ice.profit, Decimal("500.00"))
 
-    def test_a_second_submit_appends_instead_of_overwriting(self):
-        self.client.force_login(self.fig_manager)
-        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "2"})
-        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "3"})
-        # Append-only: two rows exist, never a silent replacement.
-        rows = list(DailySale.objects.filter(product=self.gilbeys, shop=self.fig_tree))
-        self.assertEqual(len(rows), 2)
-        total = sum((r.units_sold for r in rows), Decimal("0"))
-        self.assertEqual(total, Decimal("5"))
+    def test_opening_stock_comes_from_yesterdays_closing(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        previous = DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            units_sold=Decimal("0"),
+            opening_stock=Decimal("0.00"),
+            additional_stock=Decimal("20.00"),
+            total_stock=Decimal("20.00"),
+            closing_stock=Decimal("9.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.filter(pk=previous.pk).update(sale_date=yesterday)
 
-    def test_blank_means_not_sold(self):
+        # The sheet shows yesterday's closing as today's opening.
         self.client.force_login(self.fig_manager)
-        response = self.client.post(
-            reverse(self.SHEET),
-            {f"qty_{self.gilbeys.pk}": "2", f"qty_{self.blue_ice.pk}": ""},
+        response = self.client.get(reverse(self.SHEET))
+        row = next(r for r in response.context["rows"] if r["product"] == self.gilbeys)
+        self.assertEqual(row["opening"], Decimal("9.00"))
+        self.assertEqual(response.context["openings"][self.gilbeys.pk], Decimal("9.00"))
+
+        # And it is stored on the new entry: 9 + 1 added = 10 total.
+        response = self.post_stock(
+            (self.gilbeys, {"additional": "1", "total": "10", "closing": "3"})
+        )
+        self.assertRedirects(response, reverse(self.SHEET))
+        today = DailySale.objects.get(
+            product=self.gilbeys, sale_date=timezone.localdate()
+        )
+        self.assertEqual(today.opening_stock, Decimal("9.00"))
+        self.assertEqual(today.units_sold, Decimal("7.00"))
+
+    def test_second_submit_replaces_todays_row(self):
+        self.client.force_login(self.fig_manager)
+        self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"})
+        )
+        self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "8"})
+        )
+        # One row per product per day: the correction replaces, never doubles.
+        rows = DailySale.objects.filter(product=self.gilbeys, shop=self.fig_tree)
+        self.assertEqual(rows.count(), 1)
+        row = rows.get()
+        self.assertEqual(row.closing_stock, Decimal("8"))
+        self.assertEqual(row.units_sold, Decimal("2.00"))
+
+    def test_blank_row_means_no_activity(self):
+        self.client.force_login(self.fig_manager)
+        response = self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"}),
+            (self.blue_ice, {}),
         )
         self.assertRedirects(response, reverse(self.SHEET))
         self.assertEqual(DailySale.objects.count(), 1)
+        self.assertEqual(
+            DailySale.objects.get().product_id, self.gilbeys.pk
+        )
 
     def test_a_product_the_shop_does_not_stock_is_rejected(self):
         self.client.force_login(self.fig_manager)
+        # A tampered product id the shop does not stock is refused wholesale.
         response = self.client.post(
             reverse(self.SHEET),
-            {f"qty_{self.gilbeys.pk}": "1", "qty_999999": "5"},
+            {"add_999999": "1", "total_999999": "5", "close_999999": "0"},
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(DailySale.objects.count(), 0)
 
-    def test_zero_or_bad_quantities_are_rejected(self):
+        # Empire does not stock Blue Ice.
+        self.client.force_login(self.empire_manager)
+        response = self.post_stock(
+            (self.blue_ice, {"additional": "10", "total": "10", "closing": "0"}),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            DailySale.objects.filter(product=self.blue_ice, shop=self.empire).exists()
+        )
+
+    def test_partial_rows_are_rejected(self):
         self.client.force_login(self.fig_manager)
-        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "0"})
+        # Total without closing: neither half can be trusted alone.
+        response = self.client.post(
+            reverse(self.SHEET), {f"total_{self.gilbeys.pk}": "10"}
+        )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(DailySale.objects.count(), 0)
 
-        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "abc"})
+    def test_closing_greater_than_total_is_rejected(self):
+        self.client.force_login(self.fig_manager)
+        response = self.post_stock(
+            (self.gilbeys, {"total": "5", "closing": "10"}),
+        )
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(DailySale.objects.count(), 0)
+
+    def test_bad_numbers_are_rejected(self):
+        self.client.force_login(self.fig_manager)
+        for bad in ("abc", "-5"):
+            response = self.post_stock(
+                (self.gilbeys, {"additional": bad, "total": "10", "closing": "4"}),
+            )
+            self.assertEqual(response.status_code, 400, bad)
+            self.assertEqual(DailySale.objects.count(), 0)
+
+    def test_mismatched_total_saves_with_a_warning(self):
+        """opening 0 + additional 2 != total 10: warn, but still save."""
+        self.client.force_login(self.fig_manager)
+        response = self.post_stock(
+            (self.gilbeys, {"additional": "2", "total": "10", "closing": "4"}),
+        )
+        self.assertEqual(response.status_code, 302)
+        row = DailySale.objects.get(product=self.gilbeys)
+        # The sale figure still comes from the count: 10 - 4 = 6.
+        self.assertEqual(row.units_sold, Decimal("6.00"))
+        self.assertEqual(row.profit, Decimal("600.00"))
+
+        page = self.client.get(reverse(self.SHEET))
+        warnings = [str(m) for m in page.context["messages"]]
+        self.assertTrue(any("does not match" in w for w in warnings), warnings)
+
+    def test_legacy_quantity_fields_are_ignored(self):
+        """The old units-only payload no longer writes rows."""
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "4"})
+        self.assertEqual(response.status_code, 302)
         self.assertEqual(DailySale.objects.count(), 0)
 
     def test_no_filled_rows_does_not_save(self):
         self.client.force_login(self.fig_manager)
-        response = self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": ""})
+        response = self.post_stock((self.gilbeys, {}))
         self.assertRedirects(response, reverse(self.SHEET))
         self.assertEqual(DailySale.objects.count(), 0)
 
     def test_day_totals_show_after_a_save(self):
         self.client.force_login(self.fig_manager)
-        self.client.post(reverse(self.SHEET), {f"qty_{self.gilbeys.pk}": "4"})
+        self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"})
+        )
         response = self.client.get(reverse(self.SHEET))
         # 4 x (550 - 450) = 400 profit, 4 units, 1 recorded product.
         self.assertEqual(response.context["day_profit"], Decimal("400.00"))
         self.assertEqual(response.context["day_units"], Decimal("4"))
         self.assertEqual(response.context["recorded_count"], 1)
 
-    def test_sheet_surfaces_the_missing_cost_warning(self):
+    def test_profit_is_not_shown_on_the_sheet(self):
+        """Profit is a dashboard figure -- the sheet never renders it."""
+        self.client.force_login(self.fig_manager)
+        self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"})
+        )
+
+        page = self.client.get(reverse(self.SHEET))
+        flash = " ".join(str(m) for m in page.context["messages"])
+        self.assertNotIn("profit", flash.lower())
+
+        html = page.content.decode()
+        self.assertNotContains(page, "row-profit")          # per-product column
+        self.assertNotContains(page, "Profit so far today")  # header card
+        self.assertNotContains(page, "new-profit")           # footer running total
+        self.assertNotIn("data-cost", html)                  # cost stays on the server
+
+        # It is still computed and stored, and the dashboard still shows it.
+        self.assertEqual(DailySale.objects.get().profit, Decimal("400.00"))
+        dash = self.client.get(reverse("manager_dashboard"))
+        self.assertContains(dash, "Today's Profit")
+
+    def test_products_without_a_cost_are_left_off_the_sheet(self):
+        """No cost, no profit -- so the product is not offered at all."""
         ShopProduct.objects.filter(shop=self.fig_tree, product=self.blue_ice).update(
             cost_price=Decimal("0.00")
         )
         self.client.force_login(self.fig_manager)
         response = self.client.get(reverse(self.SHEET))
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(any(r["cost"] <= 0 for r in response.context["rows"]))
-        self.assertContains(response, "no cost")
+        names = {r["product"].name for r in response.context["rows"]}
+        self.assertIn("Gilbeys", names)
+        self.assertNotIn("Blue Ice", names)
+        # Not rendered anywhere on the page either.
+        self.assertNotIn("Blue Ice", response.content.decode())
+        self.assertContains(response, "until the owner prices them")
+
+        # A crafted POST cannot force an unpriced product in either.
+        response = self.post_stock(
+            (self.blue_ice, {"additional": "10", "total": "10", "closing": "0"}),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(DailySale.objects.filter(product=self.blue_ice).exists())
+
+    def test_rows_follow_the_price_list_row_order(self):
+        """250ml first ... exactly as the owner's spreadsheet reads."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = "all"
+            sheet.append(["Product", "Cost Price", "Selling Price", "Category"])
+            # Gilbeys deliberately listed first: alphabetically it would be last.
+            sheet.append(["Gilbeys", 416, 550, "250ml"])
+            sheet.append(["Blue Ice", 95, 200, "250ml"])
+            workbook.save(os.path.join(tmp, "price list.xlsx"))
+
+            with override_settings(BASE_DIR=tmp):
+                self.client.force_login(self.fig_manager)
+                response = self.client.get(reverse(self.SHEET))
+
+        self.assertEqual(response.status_code, 200)
+        names = [r["product"].name for r in response.context["rows"]]
+        self.assertEqual(names, ["Gilbeys", "Blue Ice"])
+
+    def test_products_missing_from_the_price_list_sort_last(self):
+        """A product the file does not know still appears, after the file's rows."""
+        extra = MasterProduct.objects.create(name="Zeta", category="350ml")
+        ShopProduct.objects.create(
+            shop=self.fig_tree,
+            product=extra,
+            cost_price=Decimal("100.00"),
+            selling_price=Decimal("150.00"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = "all"
+            sheet.append(["Product", "Cost Price", "Selling Price", "Category"])
+            sheet.append(["Gilbeys", 416, 550, "250ml"])
+            sheet.append(["Blue Ice", 95, 200, "250ml"])
+            workbook.save(os.path.join(tmp, "price list.xlsx"))
+
+            with override_settings(BASE_DIR=tmp):
+                self.client.force_login(self.fig_manager)
+                response = self.client.get(reverse(self.SHEET))
+
+        names = [r["product"].name for r in response.context["rows"]]
+        self.assertEqual(names, ["Gilbeys", "Blue Ice", "Zeta"])
 
     def test_owner_is_refused_when_they_have_no_shop(self):
         self.client.force_login(self.owner)
         self.assertEqual(self.client.get(reverse(self.SHEET)).status_code, 403)
+
+
+class ShopPriceSheetCommandTests(BaseDataTestCase):
+    """Per-shop price workbooks: make copies, edit them, import them back."""
+
+    @staticmethod
+    def path_in(directory, shop_name):
+        return os.path.join(directory, f"price list - {shop_name}.xlsx")
+
+    @staticmethod
+    def set_price(path, product_name, cost, selling):
+        """Edit a generated workbook the way the owner would by hand."""
+        workbook = openpyxl.load_workbook(path)
+        sheet = workbook.active
+        for row in sheet.iter_rows(min_row=2):
+            if str(row[0].value or "").strip() == product_name:
+                row[1].value = float(cost)
+                row[2].value = float(selling)
+        workbook.save(path)
+
+    def test_make_writes_one_copy_per_shop_with_own_prices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command("make_shop_price_sheets", "--dir", tmp)
+            fig = self.path_in(tmp, "Fig Tree")
+            empire = self.path_in(tmp, "Empire Shop")
+            self.assertTrue(os.path.exists(fig))
+            self.assertTrue(os.path.exists(empire))
+
+            # Each copy carries that shop's selling price for the same product.
+            sheet = openpyxl.load_workbook(fig).active
+            prices = {
+                str(r[0]).strip(): (r[1], r[2])
+                for r in ((row[0].value, row[1].value, row[2].value)
+                          for row in sheet.iter_rows(min_row=2))
+            }
+            self.assertEqual(prices["Gilbeys"][1], 550.0)   # Fig Tree sells at 550
+            sheet = openpyxl.load_workbook(empire).active
+            prices = {
+                str(r[0]).strip(): (r[1], r[2])
+                for r in ((row[0].value, row[1].value, row[2].value)
+                          for row in sheet.iter_rows(min_row=2))
+            }
+            self.assertEqual(prices["Gilbeys"][1], 600.0)   # Empire sells at 600
+
+    def test_existing_copies_are_not_overwritten_without_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command("make_shop_price_sheets", "--shop", "Fig Tree", "--dir", tmp)
+            path = self.path_in(tmp, "Fig Tree")
+            self.set_price(path, "Gilbeys", "111", "222")
+
+            call_command("make_shop_price_sheets", "--shop", "Fig Tree", "--dir", tmp)
+            sheet = openpyxl.load_workbook(path).active
+            edited = [
+                (row[1].value, row[2].value)
+                for row in sheet.iter_rows(min_row=2)
+                if str(row[0].value or "").strip() == "Gilbeys"
+            ]
+            self.assertEqual(edited, [(111.0, 222.0)])  # the hand edits survived
+
+    def test_import_updates_only_the_matching_shop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command("make_shop_price_sheets", "--dir", tmp)
+            self.set_price(self.path_in(tmp, "Fig Tree"), "Gilbeys", "500", "700")
+            call_command("import_shop_price_sheets", "--dir", tmp)
+
+        fig = ShopProduct.objects.get(shop=self.fig_tree, product=self.gilbeys)
+        self.assertEqual(fig.cost_price, Decimal("500.00"))
+        self.assertEqual(fig.selling_price, Decimal("700.00"))
+
+        empire = ShopProduct.objects.get(shop=self.empire, product=self.gilbeys)
+        self.assertEqual(empire.cost_price, Decimal("450.00"))
+        self.assertEqual(empire.selling_price, Decimal("600.00"))
+
+    def test_unknown_products_are_reported_and_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            call_command("make_shop_price_sheets", "--shop", "Fig Tree", "--dir", tmp)
+            path = self.path_in(tmp, "Fig Tree")
+            workbook = openpyxl.load_workbook(path)
+            workbook.active.append(["Mystery Item", 100, 150, "250ml"])
+            workbook.save(path)
+
+            out = StringIO()
+            call_command("import_shop_price_sheets", path, stdout=out)
+
+        self.assertIn("unknown product", out.getvalue())
+        self.assertFalse(MasterProduct.objects.filter(name="Mystery Item").exists())

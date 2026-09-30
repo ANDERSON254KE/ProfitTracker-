@@ -33,6 +33,7 @@ from .mixins import (
     OwnerRequiredMixin,
 )
 from .models import CustomUser, DailySale, Shop, ShopProduct
+from .price_list import price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
 OWNER_TREND_DAYS = 7
@@ -52,6 +53,13 @@ def _money(value) -> Decimal:
 def _shop_sales(shop):
     """Return the DailySale queryset for one shop (used by both dashboards)."""
     return DailySale.objects.filter(shop=shop).select_related("product", "recorded_by")
+
+
+def _input_value(value) -> str:
+    """Render a stock figure for an HTML input: '' when there is no figure yet."""
+    if value is None:
+        return ""
+    return str(value)
 
 
 class LoginView(AuthLoginView):
@@ -125,11 +133,13 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
         context["total_units"] = _money(overall["units"])
         context["total_revenue"] = _money(overall["revenue"])
 
-        # Per-shop profit and units, one row per shop (zero-sold shops included).
+        # Per-shop profit, units and amount sold, one row per shop (zero-sold shops included).
         per_shop = {
             row["shop"]: row
             for row in sales.values("shop")
-            .annotate(profit=Sum("profit"), units=Sum("units_sold"))
+            .annotate(
+                profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+            )
         }
         shop_rows = []
         for shop in shops:
@@ -139,6 +149,7 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
                     "shop": shop,
                     "profit": _money(row.get("profit")),
                     "units": _money(row.get("units")),
+                    "revenue": _money(row.get("revenue")),
                 }
             )
         shop_rows.sort(key=lambda r: r["profit"], reverse=True)
@@ -196,10 +207,11 @@ class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
         sales = _shop_sales(shop)
 
         today_row = sales.filter(sale_date=today).aggregate(
-            profit=Sum("profit"), units=Sum("units_sold")
+            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
         )
         context["today_profit"] = _money(today_row["profit"])
         context["today_units"] = _money(today_row["units"])
+        context["today_revenue"] = _money(today_row["revenue"])
 
         lifetime = sales.aggregate(profit=Sum("profit"), units=Sum("units_sold"))
         context["total_profit"] = _money(lifetime["profit"])
@@ -249,51 +261,81 @@ class DailySaleCreateView(LoginRequiredMixin, ManagerShopAccessMixin, CreateView
 class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, TemplateView):
     """Record a whole trading day for the manager's shop in one submit.
 
-    ``GET`` lists every active product in the shop's range with a quantity box
-    and a live profit preview; ``POST`` writes one
-    :class:`~tracker.models.DailySale` per quantity that was filled in.
+    ``GET`` lists the shop's products in the owner's price-list row order
+    (250ml first, down to soda) with their opening stock -- the previous day's
+    closing stock -- and boxes for additional stock, total stock and closing
+    stock; sold units and the amount sold are derived server side. Products
+    with no cost price are not shown: they cannot produce a profit, so the
+    owner must price them first.
 
-    Entry is append-only: submitting again adds to the day rather than
-    replacing it, and no route exists to edit or delete a recorded sale.
+    ``POST`` upserts one stock row per filled-in product for today: submitting
+    again replaces today's figures instead of double-counting them.
     """
 
     template_name = "tracker/daily_sales_sheet.html"
 
     def _build_context(self):
-        """Gather the sheet rows and the day's recorded totals."""
+        """Gather the sheet rows, openings and the day's recorded totals."""
         shop = self.shop
         today = timezone.localdate()
 
         price_card = list(
-            ShopProduct.objects.filter(shop=shop, is_active=True)
+            ShopProduct.objects.filter(
+                shop=shop, is_active=True, cost_price__gt=0
+            )
             .select_related("product")
             .order_by("product__name", "product__category")
         )
 
-        already = list(
-            DailySale.objects.filter(shop=shop, sale_date=today).select_related("product")
-        )
-        recorded_by_product = {}
-        for sale in already:
-            units, profit = recorded_by_product.get(sale.product_id, (None, None))
-            recorded_by_product[sale.product_id] = (
-                (units or 0) + sale.units_sold,
-                (profit or Decimal("0.00")) + sale.profit,
+        # Follow the owner's price-list row order (250ml ... soda). Products
+        # missing from the file sort alphabetically after the listed ones.
+        rank = price_list_rank()
+        price_card.sort(
+            key=lambda card: (
+                rank.get((card.product.name, card.product.category), len(rank)),
+                card.product.name,
+                card.product.category,
             )
+        )
+
+        # Today's saved stock rows, used to pre-fill the inputs.
+        today_entries = {
+            sale.product_id: sale
+            for sale in DailySale.objects.filter(
+                shop=shop, sale_date=today, total_stock__isnull=False
+            )
+        }
+
+        # Opening stock = the latest closing stock before today, per product.
+        openings = {}
+        previous = (
+            DailySale.objects.filter(
+                shop=shop, sale_date__lt=today, closing_stock__isnull=False
+            )
+            .order_by("product_id", "-sale_date", "-id")
+        )
+        for sale in previous:
+            openings.setdefault(sale.product_id, sale.closing_stock)
 
         rows = []
         for card in price_card:
-            product = card.product
-            recorded_units, recorded_profit = recorded_by_product.get(
-                product.pk, (None, None)
-            )
+            entry = today_entries.get(card.product_id)
             rows.append(
                 {
-                    "product": product,
+                    "product": card.product,
                     "cost": card.cost_price,
                     "price": card.selling_price,
-                    "recorded_units": recorded_units,
-                    "recorded_profit": recorded_profit,
+                    "opening": openings.get(card.product_id, Decimal("0.00")),
+                    "entry": entry,
+                    "additional_input": _input_value(
+                        entry.additional_stock if entry else None
+                    ),
+                    "total_input": _input_value(entry.total_stock if entry else None),
+                    "closing_input": _input_value(
+                        entry.closing_stock if entry else None
+                    ),
+                    "sold": entry.units_sold if entry else None,
+                    "amount": entry.total_revenue if entry else None,
                 }
             )
 
@@ -307,14 +349,14 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         return {
             "shop": shop,
             "today": today,
+            "openings": openings,
             "rows": rows,
             "has_products": bool(rows),
-            "missing_cost_rows": [r for r in rows if r["cost"] <= 0],
             "day_revenue": _money(day["revenue"]),
             "day_cost": _money(day["cost"]),
             "day_profit": _money(day["profit"]),
             "day_units": _money(day["units"]),
-            "recorded_count": len(already),
+            "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
         }
 
     def get(self, request, *args, **kwargs):
@@ -322,26 +364,50 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         return self.render_to_response(self._build_context())
 
     def post(self, request, *args, **kwargs):
-        """Save every filled-in quantity, then show the day's running totals."""
-        form = DailySalesSheetForm(request.POST, shop=self.shop)
+        """Save every filled-in stock row, then show the day's running totals."""
         context = self._build_context()
+        form = DailySalesSheetForm(
+            request.POST,
+            shop=self.shop,
+            openings=context["openings"],
+            day=context["today"],
+        )
         if not form.is_valid():
+            # Keep whatever the user typed so a rejected row can be fixed in place.
+            for row in context["rows"]:
+                key = row["product"].pk
+                for name, prefix in (
+                    ("additional_input", DailySalesSheetForm.ADDITIONAL_PREFIX),
+                    ("total_input", DailySalesSheetForm.TOTAL_PREFIX),
+                    ("closing_input", DailySalesSheetForm.CLOSING_PREFIX),
+                ):
+                    raw = request.POST.get(f"{prefix}{key}")
+                    if raw is not None and str(raw).strip() != "":
+                        row[name] = raw
             context["form_errors"] = form.non_field_errors()
+            context["form_warnings"] = form.warnings
             return self.render_to_response(context, status=400)
 
         sales = form.save(request.user)
+        for warning in form.warnings:
+            messages.warning(request, warning)
+
         if not sales:
             messages.warning(
-                request, "Nothing was entered. Fill in a quantity for the products sold."
+                request,
+                "Nothing was entered. Fill in additional stock, total stock and "
+                "closing stock for the products that changed, or leave a row blank.",
             )
             return redirect("daily_sales_sheet")
 
         units = sum((s.units_sold for s in sales), Decimal("0.00"))
-        profit = sum((s.profit for s in sales), Decimal("0.00"))
+        amount = sum((s.total_revenue for s in sales), Decimal("0.00"))
+        # Profit is deliberately left out of the sheet and this flash: it is a
+        # dashboard figure, shown to the manager on their dashboard.
         messages.success(
             request,
-            f"Saved {len(sales)} product(s), {units.normalize():f} unit(s) for "
-            f"{self.shop.name}. Profit so far today: {CURRENCY} {profit:,.2f}.",
+            f"Saved {len(sales)} product(s): {units.normalize():f} unit(s) sold, "
+            f"amount {CURRENCY} {amount:,.2f}.",
         )
         return redirect("daily_sales_sheet")
 

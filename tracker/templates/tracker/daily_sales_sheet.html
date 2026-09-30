@@ -1,19 +1,19 @@
 {% extends "tracker/base.html" %}
 {% load money %}
 
-{% block title %}Today's Sales · {{ shop.name }} · Profit Tracker{% endblock %}
+{% block title %}Daily Stock Sheet · {{ shop.name }} · Profit Tracker{% endblock %}
 
 {% block content %}
 <div class="mb-6 flex flex-wrap items-end justify-between gap-3">
     <div>
-        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Today's Sales</h1>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Daily Stock Sheet</h1>
         <p class="text-sm text-slate-500">{{ shop.name }} · {{ today|date:"l, d F Y" }}</p>
     </div>
-    <div class="rounded-lg bg-white px-4 py-2 text-sm shadow">
-        <span class="font-semibold text-slate-500">Profit so far today:&nbsp;</span>
-        <span id="day-profit" class="font-bold {% if day_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-            {{ day_profit|ksh }}
-        </span>
+    <div class="flex flex-wrap gap-3 text-sm">
+        <div class="rounded-lg bg-white px-4 py-2 shadow">
+            <span class="font-semibold text-slate-500">Amount today:&nbsp;</span>
+            <span id="day-amount" class="font-bold text-slate-900">{{ day_revenue|ksh }}</span>
+        </div>
     </div>
 </div>
 
@@ -26,17 +26,12 @@
     </div>
 {% endif %}
 
-{% if missing_cost_rows %}
-    <div class="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-        <span class="mt-0.5 text-lg leading-none">⚠</span>
-        <div>
-            <p class="font-semibold">Some products have no cost set, so their profit will be recorded as full revenue.</p>
-            <p class="mt-1 text-amber-700">The owner can add real costs from the pricing page.</p>
-            <p class="mt-1 text-xs text-amber-600">
-                {{ missing_cost_rows|length }} product(s):
-                {% for row in missing_cost_rows|slice:":5" %}{{ row.product.name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if missing_cost_rows|length > 5 %}…{% endif %}
-            </p>
-        </div>
+{% if form_warnings %}
+    <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+        <p class="mb-1 font-semibold">Check these counts:</p>
+        <ul class="list-inside list-disc space-y-0.5">
+            {% for warning in form_warnings %}<li>{{ warning }}</li>{% endfor %}
+        </ul>
     </div>
 {% endif %}
 
@@ -45,9 +40,13 @@
     <div class="overflow-hidden rounded-xl bg-white shadow">
         <div class="border-b border-slate-200 bg-slate-50 px-5 py-3">
             <p class="text-sm text-slate-500">
-                Type the number sold today for each product. Leave a row blank if it was not sold.
-                Since profits are calculated here automatically and once saved they cannot be changed,
-                please double-check before saving.
+                Products are listed in the same order as the price list, from 250ml down to soda.
+                Opening stock is yesterday's closing stock. Enter the stock received (additional),
+                the counted <strong>total stock</strong> and the <strong>closing stock</strong> at the end of the day —
+                units sold and the amount sold are worked out automatically.
+                Leave a whole row blank if the product had no activity. Rows saved earlier today are pre-filled;
+                saving again replaces them, so you can correct a count.
+                Products with no cost price are not shown here until the owner prices them.
             </p>
         </div>
 
@@ -60,47 +59,50 @@
                 <table class="min-w-full divide-y divide-slate-200 text-sm">
                     <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th class="px-5 py-3 text-left font-semibold">Product</th>
-                            <th class="px-5 py-3 text-right font-semibold">Unit cost</th>
-                            <th class="px-5 py-3 text-right font-semibold">Selling price</th>
-                            <th class="px-5 py-3 text-right font-semibold">Sold today</th>
-                            <th class="px-5 py-3 text-right font-semibold">Already recorded</th>
-                            <th class="px-5 py-3 text-right font-semibold">Revenue</th>
-                            <th class="px-5 py-3 text-right font-semibold">Cost</th>
-                            <th class="px-5 py-3 text-right font-semibold">Profit</th>
+                            <th class="px-4 py-3 text-left font-semibold">Product</th>
+                            <th class="px-4 py-3 text-right font-semibold">Selling price</th>
+                            <th class="px-4 py-3 text-right font-semibold" title="Yesterday's closing stock">Opening</th>
+                            <th class="px-4 py-3 text-right font-semibold">Additional</th>
+                            <th class="px-4 py-3 text-right font-semibold">Total stock</th>
+                            <th class="px-4 py-3 text-right font-semibold">Closing stock</th>
+                            <th class="px-4 py-3 text-right font-semibold">Sold</th>
+                            <th class="px-4 py-3 text-right font-semibold">Amount</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         {% for row in rows %}
-                            <tr class="hover:bg-slate-50" data-cost="{{ row.cost }}" data-price="{{ row.price }}">
-                                <td class="px-5 py-2.5">
+                            <tr class="hover:bg-slate-50" data-price="{{ row.price }}" data-opening="{{ row.opening }}">
+                                <td class="px-4 py-2.5 whitespace-nowrap">
                                     <span class="font-medium text-slate-900">{{ row.product.name }}</span>
                                     <span class="ml-1 text-xs text-slate-400">{{ row.product.category }}</span>
+                                    {% if row.entry %}<span class="ml-1 text-xs text-emerald-600" title="Saved earlier today">✓</span>{% endif %}
                                 </td>
-                                <td class="px-5 py-2.5 text-right text-slate-500">{{ row.cost|ksh }}</td>
-                                <td class="px-5 py-2.5 text-right text-slate-700">{{ row.price|ksh }}</td>
-                                <td class="px-5 py-2.5 text-right">
-                                    <input type="number"
-                                           name="qty_{{ row.product.pk }}"
-                                           inputmode="decimal"
-                                           min="0.01"
-                                           step="any"
-                                           value=""
-                                           data-currency=""
-                                           class="qty w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                <td class="px-4 py-2.5 text-right text-slate-700">{{ row.price|ksh }}</td>
+                                <td class="px-4 py-2.5 text-right text-slate-500" title="Yesterday's closing stock">{{ row.opening|units }}</td>
+                                <td class="px-4 py-2.5 text-right">
+                                    <input type="number" name="add_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                           value="{{ row.additional_input }}"
+                                           class="in-add stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                            placeholder="0">
                                 </td>
-                                <td class="px-5 py-2.5 text-right text-slate-500">
-                                    {% if row.recorded_units %}
-                                        <strong class="text-slate-700">{{ row.recorded_units|units }}</strong>
-                                        <span class="text-emerald-600">({{ row.recorded_profit|ksh }})</span>
-                                    {% else %}
-                                        <span class="text-slate-300">—</span>
-                                    {% endif %}
+                                <td class="px-4 py-2.5 text-right">
+                                    <input type="number" name="total_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                           value="{{ row.total_input }}"
+                                           class="in-total stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           placeholder="0">
                                 </td>
-                                <td class="px-5 py-2.5 text-right text-slate-700 row-revenue">—</td>
-                                <td class="px-5 py-2.5 text-right text-slate-500 row-cost">—</td>
-                                <td class="px-5 py-2.5 text-right font-semibold row-profit">—</td>
+                                <td class="px-4 py-2.5 text-right">
+                                    <input type="number" name="close_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                           value="{{ row.closing_input }}"
+                                           class="in-close stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           placeholder="0">
+                                </td>
+                                <td class="px-4 py-2.5 text-right font-medium text-slate-700 row-sold">
+                                    {% if row.entry %}{{ row.sold|units }}{% else %}—{% endif %}
+                                </td>
+                                <td class="px-4 py-2.5 text-right text-slate-700 row-revenue">
+                                    {% if row.entry %}{{ row.amount|ksh }}{% else %}—{% endif %}
+                                </td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -108,12 +110,13 @@
             </div>
             <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
                 <p class="text-sm text-slate-600">
-                    <span class="font-semibold text-slate-900">New:</span> <span id="new-line-count">0</span> product(s),
-                    profit <span id="new-profit" class="font-semibold text-emerald-600">KSh 0.00</span>
+                    <span class="font-semibold text-slate-900">Entered:</span> <span id="new-line-count">0</span> product(s),
+                    <span id="new-units">0</span> unit(s) sold,
+                    amount <span id="new-amount" class="font-semibold text-slate-900">KSh 0.00</span>
                 </p>
                 <button type="submit"
-                        class="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline-indigo-600">
-                    Save today's sales
+                        class="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline-indigo-500">
+                    Save today's sheet
                 </button>
             </div>
         {% endif %}
@@ -127,55 +130,80 @@
 
         const money = new Intl.NumberFormat("en", {minimumFractionDigits: 2, maximumFractionDigits: 2});
         const quantity = new Intl.NumberFormat("en", {maximumFractionDigits: 4});
+        const warnClass = "border-amber-400 bg-amber-50";
+        const badClass = "border-rose-500 bg-rose-50";
+
+        function num(el) {
+            if (!el || el.value === "") return null;
+            const v = parseFloat(el.value);
+            return isNaN(v) ? null : v;
+        }
 
         function update() {
-            let newCount = 0;
-            let newRevenue = 0, newCost = 0, newProfit = 0;
+            let newCount = 0, newUnits = 0, newAmount = 0;
 
-            sheet.querySelectorAll("tr[data-cost]").forEach(function (row) {
-                const input = row.querySelector("input.qty");
-                const cost = parseFloat(row.dataset.cost) || 0;
+            sheet.querySelectorAll("tr[data-price]").forEach(function (row) {
+                const add = num(row.querySelector(".in-add"));
+                const total = num(row.querySelector(".in-total"));
+                const closing = num(row.querySelector(".in-close"));
+                const totalInput = row.querySelector(".in-total");
+                const closeInput = row.querySelector(".in-close");
+                const opening = parseFloat(row.dataset.opening) || 0;
                 const price = parseFloat(row.dataset.price) || 0;
-                const qty = parseFloat(input.value) || 0;
 
                 const cells = {
+                    sold: row.querySelector(".row-sold"),
                     revenue: row.querySelector(".row-revenue"),
-                    cost: row.querySelector(".row-cost"),
-                    profit: row.querySelector(".row-profit"),
                 };
 
-                if (qty <= 0) {
+                totalInput.classList.remove(warnClass, badClass);
+                closeInput.classList.remove(badClass);
+
+                const touched = add !== null || total !== null || closing !== null;
+                if (!touched) {
+                    cells.sold.textContent = "—";
                     cells.revenue.textContent = "—";
-                    cells.cost.textContent = "—";
-                    cells.profit.textContent = "—";
                     return;
                 }
 
-                const revenue = price * qty;
-                const costTotal = cost * qty;
-                const profit = revenue - costTotal;
-                newCount += 1;
-                newRevenue += revenue;
-                newCost += costTotal;
-                newProfit += profit;
+                // Physical sanity checks mirror the server-side validation.
+                if (total !== null && closing !== null && closing > total) {
+                    closeInput.classList.add(badClass);
+                    totalInput.classList.add(badClass);
+                    cells.sold.textContent = "!";
+                    cells.revenue.textContent = "!";
+                    return;
+                }
 
-                cells.revenue.textContent = "KSh " + money.format(revenue);
-                cells.cost.textContent = "KSh " + money.format(costTotal);
-                cells.profit.textContent = "KSh " + money.format(profit);
-                cells.profit.className = "px-5 py-2.5 text-right font-semibold " +
-                    (profit < 0 ? "text-rose-600" : "text-emerald-600");
+                if (total !== null) {
+                    const expected = opening + (add || 0);
+                    if (Math.abs(total - expected) > 0.001) totalInput.classList.add(warnClass);
+                }
+
+                if (total === null || closing === null) {
+                    cells.sold.textContent = "…";
+                    cells.revenue.textContent = "…";
+                    return;
+                }
+
+                const sold = total - closing;
+                const amount = sold * price;
+
+                cells.sold.textContent = quantity.format(sold);
+                cells.revenue.textContent = "KSh " + money.format(amount);
+
+                newCount += 1;
+                newUnits += sold;
+                newAmount += amount;
             });
 
-            const newProfitEl = document.getElementById("new-profit");
-            if (newProfitEl) {
-                newProfitEl.textContent = "KSh " + money.format(newProfit);
-                newProfitEl.className = "font-semibold " + (newProfit < 0 ? "text-rose-600" : "text-emerald-600");
-            }
-            const countEl = document.getElementById("new-line-count");
-            if (countEl) countEl.textContent = String(newCount);
+            const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+            set("new-line-count", String(newCount));
+            set("new-units", quantity.format(newUnits));
+            set("new-amount", "KSh " + money.format(newAmount));
         }
 
-        sheet.querySelectorAll("input.qty").forEach(function (input) {
+        sheet.querySelectorAll("input.stock-input").forEach(function (input) {
             input.addEventListener("input", update);
             input.addEventListener("change", update);
         });
