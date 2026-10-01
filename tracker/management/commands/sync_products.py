@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 import pandas as pd
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db.models import Count
 
 from tracker.models import Product
 
@@ -49,14 +50,28 @@ class Command(BaseCommand):
                 obj.save()
                 updated += 1
 
-        # Remove products that no longer exist in the price list.
+        # Remove products that no longer exist in the price list. Products
+        # with recorded sales or transactions are kept instead: deleting them
+        # cascades to that history, and a stale/edited price list must never be
+        # able to erase past results. They are reported so the owner can either
+        # restore the row in the sheet or retire them deliberately.
         removed = 0
+        kept_with_history = []
         if price_keys:
-            for product in Product.objects.all():
+            candidates = Product.objects.annotate(
+                n_sales=Count("daily_sales", distinct=True),
+                n_transactions=Count("transactions", distinct=True),
+            )
+            for product in candidates:
                 pkey = (product.product_name.strip().lower(), (product.category or "").strip().lower())
-                if pkey not in price_keys:
-                    product.delete()
-                    removed += 1
+                if pkey in price_keys:
+                    continue
+                history = product.n_sales + product.n_transactions
+                if history:
+                    kept_with_history.append((product, history))
+                    continue
+                product.delete()
+                removed += 1
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -65,3 +80,15 @@ class Command(BaseCommand):
                 f"Total products: {Product.objects.count()}"
             )
         )
+        if kept_with_history:
+            listed = ", ".join(
+                f"{product.product_name} ({product.category or 'no category'}: {history})"
+                for product, history in kept_with_history
+            )
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Kept {len(kept_with_history)} product(s) missing from the price list "
+                    f"because they have recorded history: {listed}. "
+                    "Add them back to price list.xlsx to manage their prices."
+                )
+            )
