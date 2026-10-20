@@ -17,7 +17,38 @@ SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
 
 def _shop_price_overrides(shop):
     """Return {product_id: selling_price} for shop-specific price overrides."""
-    return {sp.product_id: sp.selling_price for sp in ProductShopPrice.objects.filter(shop=shop)}
+    return {
+        sp.product_id: sp.selling_price
+        for sp in ProductShopPrice.objects.filter(shop=shop)
+        if sp.selling_price is not None
+    }
+
+
+def _shop_cost_overrides(shop):
+    """Return {product_id: cost_price} for shop-specific cost overrides."""
+    return {
+        sp.product_id: sp.cost_price
+        for sp in ProductShopPrice.objects.filter(shop=shop)
+        if sp.cost_price is not None
+    }
+
+
+def _save_shop_cost_override(shop, product, cost):
+    """Persist a manually-changed cost price for one shop only.
+
+    Setting it back to the product's default cost clears the override so the
+    shop follows the global price again.
+    """
+    override, _ = ProductShopPrice.objects.get_or_create(product=product, shop=shop)
+    if cost is None or cost == product.cost_price:
+        if override.cost_price is not None:
+            override.cost_price = None
+            override.save(update_fields=['cost_price'])
+        if override.selling_price is None and override.cost_price is None:
+            override.delete()
+    elif override.cost_price != cost:
+        override.cost_price = cost
+        override.save(update_fields=['cost_price'])
 
 
 def dashboard(request):
@@ -196,13 +227,17 @@ def daily_sales_product_lookup(request):
     product = Product.objects.filter(product_name__iexact=name).first()
     if product is not None:
         selling_price = product.selling_price
+        cost_price = product.cost_price
         if shop in SHOPS:
             override = ProductShopPrice.objects.filter(product=product, shop=shop).first()
             if override:
-                selling_price = override.selling_price
+                if override.selling_price is not None:
+                    selling_price = override.selling_price
+                if override.cost_price is not None:
+                    cost_price = override.cost_price
         return JsonResponse({
             'found': True,
-            'cost_price': str(product.cost_price),
+            'cost_price': str(cost_price),
             'selling_price': str(selling_price),
             'category': product.category or '',
         })
@@ -242,15 +277,24 @@ def daily_sales(request):
                 DailySale.objects.filter(shop=shop, date=sale_date)
             }
             overrides = _shop_price_overrides(shop)
+            cost_overrides = _shop_cost_overrides(shop)
 
             for product in _sale_products():
                 qty = _parse_decimal(request.POST.get('qty_%d' % product.pk))
                 sell_price = _parse_decimal(request.POST.get('sell_%d' % product.pk))
                 cost_price = _parse_decimal(request.POST.get('cost_%d' % product.pk))
                 sale = existing.get(product.pk)
+                # A manually-changed cost price sticks to this shop only, so
+                # editing it here (e.g. Fig Tree) never touches other shops.
+                if cost_price is not None and cost_price != cost_overrides.get(product.pk, product.cost_price):
+                    _save_shop_cost_override(shop, product, cost_price)
+                    if cost_price == product.cost_price:
+                        cost_overrides.pop(product.pk, None)
+                    else:
+                        cost_overrides[product.pk] = cost_price
                 if qty and qty > 0:
                     sell = sell_price if sell_price is not None else overrides.get(product.pk, product.selling_price)
-                    cost = cost_price if cost_price is not None else product.cost_price
+                    cost = cost_price if cost_price is not None else cost_overrides.get(product.pk, product.cost_price)
                     if sale:
                         sale.quantity_sold = qty
                         sale.sell_price = sell
@@ -290,7 +334,12 @@ def daily_sales(request):
                         )
                     else:
                         if buy is not None:
-                            product.cost_price = buy
+                            # Shop-specific: don't overwrite the global cost.
+                            _save_shop_cost_override(shop, product, buy)
+                            if buy == product.cost_price:
+                                cost_overrides.pop(product.pk, None)
+                            else:
+                                cost_overrides[product.pk] = buy
                         product.selling_price = sell
                         if cat:
                             product.category = cat
@@ -302,13 +351,13 @@ def daily_sales(request):
                         defaults={
                             'quantity_sold': qty,
                             'sell_price': sell,
-                            'cost_price': product.cost_price,
+                            'cost_price': buy if buy is not None else cost_overrides.get(product.pk, product.cost_price),
                         },
                     )
                     if not created:
                         sale.quantity_sold = qty
                         sale.sell_price = sell
-                        sale.cost_price = product.cost_price
+                        sale.cost_price = buy if buy is not None else cost_overrides.get(product.pk, product.cost_price)
                         sale.save()
 
             # Manually-typed day totals (Total Sales / Profit / Expenditure) for
@@ -343,6 +392,7 @@ def daily_sales(request):
         DailySale.objects.filter(shop=shop, date=sale_date)
     }
     overrides = _shop_price_overrides(shop)
+    cost_overrides = _shop_cost_overrides(shop)
 
     # Expenditure is the single value the user types (DayTotals), not itemized.
     day_totals = DayTotals.objects.filter(shop=shop, date=sale_date).first()
@@ -372,7 +422,7 @@ def daily_sales(request):
                 p,
                 sale.quantity_sold if sale else '',
                 overrides.get(p.pk, p.selling_price),
-                sale.cost_price if sale else p.cost_price,
+                sale.cost_price if sale else cost_overrides.get(p.pk, p.cost_price),
             ))
         categories_data.append({'name': cat, 'rows': rows})
 
@@ -385,7 +435,7 @@ def daily_sales(request):
                 p,
                 sale.quantity_sold if sale else '',
                 overrides.get(p.pk, p.selling_price),
-                sale.cost_price if sale else p.cost_price,
+                sale.cost_price if sale else cost_overrides.get(p.pk, p.cost_price),
             ))
         categories_data.append({'name': 'Custom', 'rows': rows})
 

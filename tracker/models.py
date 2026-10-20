@@ -77,9 +77,15 @@ class DailySale(models.Model):
 
 
 class ProductShopPrice(models.Model):
+    """Per-shop price overrides. Either field may be left blank: a blank
+    selling_price means the shop follows the product's default selling price,
+    a blank cost_price means it follows the default cost price. This lets a
+    manual cost-price change in one shop (e.g. Fig Tree) stay in that shop
+    without affecting the others."""
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='shop_prices')
     shop = models.CharField("Shop", max_length=50, choices=SHOP_CHOICES)
-    selling_price = models.DecimalField("Selling Price", max_digits=10, decimal_places=2)
+    selling_price = models.DecimalField("Selling Price", max_digits=10, decimal_places=2, null=True, blank=True)
+    cost_price = models.DecimalField("Cost Price", max_digits=10, decimal_places=2, null=True, blank=True)
 
     class Meta:
         unique_together = ('product', 'shop')
@@ -87,7 +93,12 @@ class ProductShopPrice(models.Model):
         verbose_name_plural = "Shop Price Overrides"
 
     def __str__(self):
-        return f"{self.product.product_name} @ {self.shop}: {self.selling_price}"
+        parts = []
+        if self.selling_price is not None:
+            parts.append(f"sell {self.selling_price}")
+        if self.cost_price is not None:
+            parts.append(f"cost {self.cost_price}")
+        return f"{self.product.product_name} @ {self.shop}: {', '.join(parts) or 'no override'}"
 
 
 class DailyExpense(models.Model):

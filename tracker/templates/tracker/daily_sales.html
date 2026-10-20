@@ -121,10 +121,10 @@
             {% for cat_data in categories_data %}
             <div class="category-section">
                 <div class="card p-0 overflow-hidden mb-2">
-                    <div class="category-header card-header bg-light d-flex justify-content-between align-items-center gap-2 py-2"
+                    <div class="category-header card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2 py-2"
                          data-bs-toggle="collapse" data-bs-target="#collapse-{{ forloop.counter }}" aria-expanded="true">
                         <h6 class="mb-0 fw-bold text-primary text-nowrap">{{ cat_data.name }} <span class="badge bg-secondary ms-2">{{ cat_data.rows|length }}</span></h6>
-                        <input type="search" class="form-control form-control-sm category-search d-none d-sm-block" style="max-width:220px;"
+                        <input type="search" class="form-control form-control-sm category-search" style="max-width:220px; min-width:130px; flex:1 1 130px;"
                                placeholder="Search {{ cat_data.name }}..." data-collapse="#collapse-{{ forloop.counter }}"
                                onclick="event.stopPropagation()">
                         <i class="bi bi-chevron-down fs-5 text-nowrap"></i>
@@ -178,6 +178,42 @@
                 </div>
                 <div id="manualRows"></div>
                 <p class="text-muted small mb-0">Tip: type a previously added item name and its buying/selling prices and category fill in automatically.</p>
+            </div>
+
+            <!-- Day Totals (bottom copy) — same values as the top card, so you can
+                 fill in expenses right before saving without scrolling up. -->
+            <div class="card p-3 mb-4 border-primary border-opacity-25" id="dayTotalsBottomCard">
+                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                    <h6 class="mb-0 fw-bold text-primary">🧮 Day Totals (quick entry) — {{ shop }}</h6>
+                    <span class="text-muted small">Same as the top card · saved for {{ sale_date|date:'j M Y' }}</span>
+                </div>
+                <div class="row g-2">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Sales</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" id="total_sales_mirror" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 20000">
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Profit</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" id="total_profit_mirror" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 5000">
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small text-muted mb-1">Total Expenditure</label>
+                        <div class="input-group">
+                            <span class="input-group-text">KSh</span>
+                            <input type="number" id="total_expenditure_mirror" min="0" step="0.01"
+                                   class="form-control text-end" placeholder="e.g. 1000">
+                        </div>
+                    </div>
+                </div>
+                <p class="text-muted small mb-0 mt-2">Typing here fills the top card automatically — press <strong>💾 Save All</strong> and both stay in step.</p>
             </div>
 
             <div class="d-flex flex-wrap gap-2 mb-4">
@@ -392,6 +428,17 @@
                     tr.style.display = name.indexOf(q) === -1 ? 'none' : '';
                 });
             });
+        });
+
+        // Bottom Day Totals card: two-way sync with the real (named) inputs up top.
+        // Only the top inputs carry name attributes, so they alone are submitted.
+        ['total_sales', 'total_profit', 'total_expenditure'].forEach(function (key) {
+            var top = document.querySelector('input[name="' + key + '"]');
+            var mirror = document.getElementById(key + '_mirror');
+            if (!top || !mirror) return;
+            mirror.value = top.value;
+            top.addEventListener('input', function () { mirror.value = top.value; });
+            mirror.addEventListener('input', function () { top.value = mirror.value; });
         });
     })();
     </script>
