@@ -12,7 +12,11 @@ import pandas as pd
 from .models import Product, Transaction, DailySale, ProductShopPrice, DayTotals
 
 SALES_CATEGORIES = ['250ml', '350ml', '750ml', 'soda', 'cans']
-SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
+SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City', 'Chambers Point']
+# Chambers Point is excluded from the combined "All Shops" workbook: it has
+# its own day-export (daily_sales_chambers_export) with its own filename.
+ALL_SHOPS_EXPORT = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
+CHAMBERS_SHOP = 'Chambers Point'
 
 
 def _shop_price_overrides(shop):
@@ -138,6 +142,13 @@ def dashboard(request):
         grand_total += row['day_total']
         shop_profits_table.append(row)
 
+    # Shop columns rendered dynamically so adding a shop (e.g. Chambers Point)
+    # doesn't leave the hardcoded table body short a column.
+    shop_keys = [s.replace(' ', '_') for s in SHOPS]
+    for row in shop_profits_table:
+        row['cells'] = [row.get(key, 0.0) for key in shop_keys]
+    shop_totals_list = [totals.get(key, 0.0) for key in shop_keys]
+
     return render(request, 'tracker/dashboard.html', {
         'products': products,
         'total_profit': total_profit,
@@ -150,6 +161,7 @@ def dashboard(request):
         'range_end': range_end,
         'shop_profits_table': shop_profits_table,
         'shop_totals': totals,
+        'shop_totals_list': shop_totals_list,
         'shop_grand_total': grand_total,
         'shops': SHOPS,
     })
@@ -543,28 +555,11 @@ def _safe_sheet_name(name):
     return (cleaned or 'Sheet')[:31]
 
 
-def daily_sales_day_export(request):
-    """Export every shop's sales for a single day into one workbook: one tab
-    per shop (its products + TOTAL/EXPENSES/NET) plus an 'All Shops' summary tab.
+def _day_export_response(sale_date, segments, summary_sheet, filename):
+    """Build a day workbook: one tab per segment (its products +
+    TOTAL/EXPENSES/NET rows) plus a summary tab, returned as a download.
     """
-    sale_date = _parse_date(request.GET.get('date')) or date.today()
-    all_sales = DailySale.objects.filter(date=sale_date).select_related('product')
     columns = ['Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit']
-
-    # (tab label, sales queryset, expenses queryset) — the four shops, then any
-    # sales/expenses whose shop is unknown (only if such rows exist).
-    day_exp = {dt.shop: dt.total_expenditure for dt in DayTotals.objects.filter(date=sale_date)}
-    segments = [
-        (name, all_sales.filter(shop=name), day_exp.get(name, Decimal('0.00')))
-        for name in SHOPS
-    ]
-    unassigned = all_sales.exclude(shop__in=SHOPS)
-    if unassigned.exists():
-        unassigned_exp = sum(
-            (v for k, v in day_exp.items() if k not in SHOPS), Decimal('0.00')
-        )
-        segments.append(('Unassigned', unassigned, unassigned_exp))
-
     summary_rows = []
     grand_units = Decimal('0.00')
     grand_profit = 0.0
@@ -615,15 +610,74 @@ def daily_sales_day_export(request):
             summary_rows,
             columns=['Shop', 'Amount Sold', 'Profit', 'Expenses', 'Net Profit'],
         )
-        summary_df.to_excel(writer, index=False, sheet_name='All Shops')
+        summary_df.to_excel(writer, index=False, sheet_name=_safe_sheet_name(summary_sheet))
 
     buffer.seek(0)
     response = HttpResponse(
         buffer.read(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
-    response['Content-Disposition'] = f'attachment; filename="all_shops_{sale_date}.xlsx"'
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+def _day_segments_for(shops, sale_date):
+    """Segments (tab label, sales, expenses) for the given shops, plus an
+    'Unassigned' segment for rows whose shop is outside every known shop.
+    """
+    all_sales = DailySale.objects.filter(date=sale_date).select_related('product')
+    day_exp = {dt.shop: dt.total_expenditure for dt in DayTotals.objects.filter(date=sale_date)}
+    segments = [
+        (name, all_sales.filter(shop=name), day_exp.get(name, Decimal('0.00')))
+        for name in shops
+    ]
+    unassigned = all_sales.exclude(shop__in=SHOPS)
+    if unassigned.exists():
+        unassigned_exp = sum(
+            (v for k, v in day_exp.items() if k not in SHOPS), Decimal('0.00')
+        )
+        segments.append(('Unassigned', unassigned, unassigned_exp))
+    return segments
+
+
+def daily_sales_day_export(request):
+    """Export the four original shops' sales for a single day into one
+    workbook: one tab per shop (its products + TOTAL/EXPENSES/NET) plus an
+    'All Shops' summary tab. Chambers Point is excluded — it has its own
+    download (daily_sales_chambers_export).
+    """
+    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    return _day_export_response(
+        sale_date,
+        _day_segments_for(ALL_SHOPS_EXPORT, sale_date),
+        'All Shops',
+        f'all_shops_{sale_date}.xlsx',
+    )
+
+
+def daily_sales_chambers_export(request):
+    """Chambers Point's own day download: its products with TOTAL/EXPENSES/NET
+    rows plus a Chambers Point summary tab, kept separate from the combined
+    'All Shops' workbook.
+    """
+    sale_date = _parse_date(request.GET.get('date')) or date.today()
+    all_sales = DailySale.objects.filter(
+        date=sale_date, shop=CHAMBERS_SHOP
+    ).select_related('product')
+    day_exp = DayTotals.objects.filter(
+        date=sale_date, shop=CHAMBERS_SHOP
+    ).first()
+    segments = [(
+        CHAMBERS_SHOP,
+        all_sales,
+        day_exp.total_expenditure if day_exp else Decimal('0.00'),
+    )]
+    return _day_export_response(
+        sale_date,
+        segments,
+        'Chambers Summary',
+        f'chambers_point_{sale_date}.xlsx',
+    )
 
 def _strict_date(value):
     try:

@@ -55,6 +55,7 @@ SHOP_CHOICES = [
     ('Empire Shop', 'Empire Shop'),
     ('Emirates', 'Emirates'),
     ('Small City', 'Small City'),
+    ('Chambers Point', 'Chambers Point'),
 ]
 
 class DailySale(models.Model):

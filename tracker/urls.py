@@ -8,6 +8,7 @@ urlpatterns = [
     path('daily-sales/product-lookup/', views.daily_sales_product_lookup, name='daily_sales_product_lookup'),
     path('daily-sales/export/', views.daily_sales_export, name='daily_sales_export'),
     path('daily-sales/day-export/', views.daily_sales_day_export, name='daily_sales_day_export'),
+    path('daily-sales/chambers-export/', views.daily_sales_chambers_export, name='daily_sales_chambers_export'),
     path('daily-sales/report/', views.daily_sales_report, name='daily_sales_report'),
     path('daily-sales/report/export/', views.daily_sales_report_export, name='daily_sales_report_export'),
     path('dashboard/export/', views.dashboard_export, name='dashboard_export'),

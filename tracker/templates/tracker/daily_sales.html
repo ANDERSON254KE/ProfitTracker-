@@ -221,7 +221,11 @@
                 <button type="button" class="btn btn-dark btn-lg" data-bs-toggle="modal" data-bs-target="#summaryModal">📋 Day Summary</button>
                 <a href="{% url 'daily_sales_report' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-outline-info btn-lg">📊 Report</a>
                 <a href="{% url 'daily_sales_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📥 This Shop</a>
+                {% if shop == 'Chambers Point' %}
+                <a href="{% url 'daily_sales_chambers_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📦 Chambers Point</a>
+                {% else %}
                 <a href="{% url 'daily_sales_day_export' %}?date={{ sale_date|date:'Y-m-d' }}" class="btn btn-success btn-lg">📦 All Shops</a>
+                {% endif %}
             </div>
         </form>
 

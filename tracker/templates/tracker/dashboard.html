@@ -103,32 +103,24 @@
                         {% for row in shop_profits_table %}
                         <tr>
                             <td class="fw-semibold">{{ row.date|date:'D, d M Y' }}</td>
-                            <td class="text-end {% if row.Fig_Tree > 0 %}text-success{% elif row.Fig_Tree < 0 %}text-danger{% endif %}">
-                                {% if row.Fig_Tree != 0 %}KSh {{ row.Fig_Tree|floatformat:2 }}{% else %}-{% endif %}
+                            {% for cell in row.cells %}
+                            <td class="text-end {% if cell > 0 %}text-success{% elif cell < 0 %}text-danger{% endif %}">
+                                {% if cell != 0 %}KSh {{ cell|floatformat:2 }}{% else %}-{% endif %}
                             </td>
-                            <td class="text-end {% if row.Empire_Shop > 0 %}text-success{% elif row.Empire_Shop < 0 %}text-danger{% endif %}">
-                                {% if row.Empire_Shop != 0 %}KSh {{ row.Empire_Shop|floatformat:2 }}{% else %}-{% endif %}
-                            </td>
-                            <td class="text-end {% if row.Emirates > 0 %}text-success{% elif row.Emirates < 0 %}text-danger{% endif %}">
-                                {% if row.Emirates != 0 %}KSh {{ row.Emirates|floatformat:2 }}{% else %}-{% endif %}
-                            </td>
-                            <td class="text-end {% if row.Small_City > 0 %}text-success{% elif row.Small_City < 0 %}text-danger{% endif %}">
-                                {% if row.Small_City != 0 %}KSh {{ row.Small_City|floatformat:2 }}{% else %}-{% endif %}
-                            </td>
+                            {% endfor %}
                             <td class="text-end fw-bold">KSh {{ row.day_total|floatformat:2 }}</td>
                         </tr>
                         {% empty %}
-                        <tr><td colspan="6" class="text-center py-4 text-muted">No data for this date range.</td></tr>
+                        <tr><td colspan="{{ shops|length|add:2 }}" class="text-center py-4 text-muted">No data for this date range.</td></tr>
                         {% endfor %}
                     </tbody>
                     {% if shop_profits_table %}
                     <tfoot class="table-light">
                         <tr class="fw-bold">
                             <td>TOTAL</td>
-                            <td class="text-end">KSh {{ shop_totals.Fig_Tree|floatformat:2 }}</td>
-                            <td class="text-end">KSh {{ shop_totals.Empire_Shop|floatformat:2 }}</td>
-                            <td class="text-end">KSh {{ shop_totals.Emirates|floatformat:2 }}</td>
-                            <td class="text-end">KSh {{ shop_totals.Small_City|floatformat:2 }}</td>
+                            {% for t in shop_totals_list %}
+                            <td class="text-end">KSh {{ t|floatformat:2 }}</td>
+                            {% endfor %}
                             <td class="text-end text-primary">KSh {{ shop_grand_total|floatformat:2 }}</td>
                         </tr>
                     </tfoot>
