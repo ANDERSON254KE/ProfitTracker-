@@ -19,7 +19,14 @@ from django.urls import reverse
 
 from tracker.models import DailySale, Product
 
-TRACKER_MODELS = ("product", "transaction", "dailysale", "dailyexpense", "daytotals")
+TRACKER_MODELS = (
+    "product",
+    "transaction",
+    "dailysale",
+    "dailyexpense",
+    "daytotals",
+    "productshopprice",
+)
 ADD_FORM_MODELS = TRACKER_MODELS
 
 
