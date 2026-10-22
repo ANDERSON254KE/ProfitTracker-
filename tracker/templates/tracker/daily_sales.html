@@ -78,7 +78,9 @@
         </form>
 
         <!-- Bulk entry -->
-        <form method="POST" action="{% url 'daily_sales' %}">
+        <!-- data-no-enter: pressing Enter in a field must NOT submit; only the
+             💾 Save All & Calculate button does. -->
+        <form method="POST" action="{% url 'daily_sales' %}" data-no-enter>
             {% csrf_token %}
             <input type="hidden" name="entry_type" value="bulk">
             <input type="hidden" name="sale_date" value="{{ sale_date|date:'Y-m-d' }}">
@@ -421,6 +423,16 @@
 
         addBtn.addEventListener('click', addRow);
         addRow();
+
+        // Pressing Enter inside the bulk-entry form only moves focus; it must
+        // never submit (and therefore never save & calculate) on its own.
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            var t = e.target;
+            if (t && t.tagName === 'INPUT' && t.closest('form[data-no-enter]')) {
+                e.preventDefault();
+            }
+        });
 
         document.querySelectorAll('.category-search').forEach(function (input) {
             input.addEventListener('input', function () {

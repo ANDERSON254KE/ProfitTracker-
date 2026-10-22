@@ -66,7 +66,7 @@
                     <div class="col-12 col-md-6">
                         <div class="card p-4 h-100 restock-card">
                             <h5 class="fw-bold mb-3">📥 Add New Stock</h5>
-                            <form method="POST">
+                            <form method="POST" data-no-enter>
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="RESTOCK">
                                 <div class="mb-3">
@@ -85,7 +85,7 @@
                     <div class="col-12 col-md-6">
                         <div class="card p-4 h-100 audit-card">
                             <h5 class="fw-bold mb-3">🧮 Record Audit</h5>
-                            <form method="POST">
+                            <form method="POST" data-no-enter>
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="AUDIT">
                                 <div class="mb-3">
@@ -135,5 +135,16 @@
             </div>
         </div>
     </div>
+    <script>
+    // Pressing Enter in a field must NOT submit the restock/audit forms;
+    // only the Save Restock / Finish & Calculate buttons do.
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        var t = e.target;
+        if (t && t.tagName === 'INPUT' && t.closest('form[data-no-enter]')) {
+            e.preventDefault();
+        }
+    });
+    </script>
 </body>
 </html>
