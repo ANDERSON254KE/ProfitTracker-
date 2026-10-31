@@ -15,7 +15,45 @@
         .table-responsive { max-height: 70vh; overflow:auto; }
         .price-input { width: 85px; }
         .qty-input { width: 100px; }
+
+        /* --- shadcn swipe actions (swipe a row left → Edit / Delete) --- */
+        .sheet-row { touch-action: pan-y; }
+        .actions-cell { width: 96px; }
+        .swipe-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center;
+                         transition: opacity .18s ease, transform .18s ease; }
+        .sd-icon-btn { width: 32px; height: 32px; border-radius: 10px; flex: 0 0 32px;
+                       border: 1px solid var(--sd-border); background: #fff; color: #3f3f46;
+                       display: inline-flex; align-items: center; justify-content: center;
+                       font-size: .9rem; box-shadow: 0 1px 2px rgba(9,9,11,.05); padding: 0; }
+        .sd-icon-btn:hover { background: #f4f4f5; color: #18181b; }
+        .sd-icon-btn:focus-visible { outline: none; box-shadow: var(--sd-ring); }
+        .sd-icon-btn.danger { color: var(--sd-red); border-color: #fecaca; background: #fef2f2; }
+        .sd-icon-btn.danger:hover { background: #fee2e2; }
+        /* Touch devices keep the actions hidden until the row is swiped open;
+           pointer-fine devices (desktop) show them permanently. */
+        @media (hover: none), (pointer: coarse) {
+            .swipe-actions { opacity: 0; transform: translateX(10px); pointer-events: none; }
+            .sheet-row.row-open .swipe-actions { opacity: 1; transform: none; pointer-events: auto; }
+        }
+        .sheet-row.row-open > td { background-color: #fafafa; }
+        .edit-row > td { background: #fafafa; padding: 12px 14px; }
+        .edit-panel { border: 1px solid var(--sd-border); background: #fff; border-radius: 14px;
+                      padding: 14px; box-shadow: var(--sd-shadow); }
+        .edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .edit-field span { display: block; font-size: .68rem; letter-spacing: .07em; text-transform: uppercase;
+                           color: #a1a1aa; font-weight: 600; margin-bottom: 4px; }
+        .edit-panel .form-control, .edit-panel .form-select { border-radius: 10px; border-color: var(--sd-border); }
+        .edit-panel .form-control:focus, .edit-panel .form-select:focus {
+            border-color: #a1a1aa; box-shadow: var(--sd-ring); }
+        .edit-btns { display: flex; gap: 8px; margin-top: 12px; }
+        .sd-btn { border-radius: 10px; font-weight: 600; font-size: .82rem; padding: 7px 15px;
+                  border: 1px solid transparent; }
+        .sd-btn-primary { background: var(--sd-primary); color: #fff; }
+        .sd-btn-primary:hover { background: var(--sd-primary-hover); color: #fff; }
+        .sd-btn-ghost { background: #fff; border-color: var(--sd-border); color: #3f3f46; }
+        .sd-btn-ghost:hover { background: #f4f4f5; color: #18181b; }
     </style>
+    {% include "tracker/site_styles.html" %}
 </head>
 <body class="pb-5">
     <nav class="navbar navbar-dark bg-dark mb-4 sticky-top">
@@ -63,6 +101,18 @@
             ✅ Saved. Sales profit <strong>KSh {{ sales_profit|floatformat:2 }}</strong>
             – expenses <strong>KSh {{ total_expenses|floatformat:2 }}</strong>
             = <strong>Net profit KSh {{ net_profit|floatformat:2 }}</strong>
+        </div>
+        {% endif %}
+
+        {% if deleted %}
+        <div class="alert alert-danger py-2 mb-3">
+            🗑 Item deleted — it is gone from the product list and all sheets.
+        </div>
+        {% endif %}
+
+        {% if edited %}
+        <div class="alert alert-success py-2 mb-3">
+            ✏️ Product updated — name, category and prices saved.
         </div>
         {% endif %}
 
@@ -120,6 +170,52 @@
                 <p class="text-muted small mb-0 mt-2">Net profit is worked out for you (Profit − Expenditure). Use <strong>💾 Save</strong> to keep them, then <strong>📋 Day Summary</strong> for the all-branches copy.</p>
             </div>
 
+            <!-- Global search: one box across the WHOLE sheet, all categories -->
+            <div class="card p-2 mb-3">
+                <div class="input-group">
+                    <span class="input-group-text border-0 bg-transparent"><i class="bi bi-search"></i></span>
+                    <input type="search" id="globalSearch" class="form-control border-0 shadow-none"
+                           placeholder="Search the whole sheet — every category, every product…">
+                    <span class="input-group-text border-0 bg-transparent small text-muted" id="globalSearchCount"></span>
+                </div>
+                <div class="small text-muted px-3 pb-1" style="font-size: .76rem;">
+                    💡 Swipe a product row to the left (or drag it) to reveal <strong>✏️ Edit</strong> and <strong>🗑 Delete</strong>.
+                </div>
+            </div>
+            <div class="card p-4 text-center text-muted mb-3 d-none" id="noMatches">
+                No products match “<span id="noMatchesQuery"></span>”.
+            </div>
+
+            <!-- Shared inline editor, cloned under whichever row is being edited -->
+            <template id="editRowTemplate">
+                <tr class="edit-row">
+                    <td colspan="6">
+                        <div class="edit-panel">
+                            <div class="edit-grid">
+                                <label class="edit-field"><span>Product name</span>
+                                    <input type="text" name="e_name" class="form-control form-control-sm">
+                                </label>
+                                <label class="edit-field"><span>Category</span>
+                                    <select name="e_category" class="form-select form-select-sm">
+                                        {% for c in manual_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+                                    </select>
+                                </label>
+                                <label class="edit-field"><span>Selling price</span>
+                                    <input type="number" name="e_sell" min="0" step="0.01" class="form-control form-control-sm">
+                                </label>
+                                <label class="edit-field"><span>Cost price</span>
+                                    <input type="number" name="e_cost" min="0" step="0.01" class="form-control form-control-sm">
+                                </label>
+                            </div>
+                            <div class="edit-btns">
+                                <button type="button" class="sd-btn sd-btn-primary" data-role="save-edit">💾 Save changes</button>
+                                <button type="button" class="sd-btn sd-btn-ghost" data-role="cancel-edit">Cancel</button>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            </template>
+
             {% for cat_data in categories_data %}
             <div class="category-section">
                 <div class="card p-0 overflow-hidden mb-2">
@@ -140,12 +236,17 @@
                                         <th>Product</th>
                                         <th class="text-end" style="width:100px;">Sell Price</th>
                                         <th class="text-end" style="width:100px;">Cost Price</th>
-                                        <th class="pe-3 text-end" style="width:140px;">Amount Sold</th>
+                                        <th class="text-end" style="width:140px;">Amount Sold</th>
+                                        <th class="pe-3 text-end" style="width:96px;"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {% for product, qty, sell, cost in cat_data.rows %}
-                                    <tr>
+                                    <tr class="sheet-row" data-name="{{ product.product_name }} {{ cat_data.name }}"
+                                        data-pk="{{ product.pk }}"
+                                        data-category="{{ product.category|default:'' }}"
+                                        data-sell="{{ product.selling_price|floatformat:2 }}"
+                                        data-cost="{{ product.cost_price|floatformat:2 }}">
                                         <td class="ps-3 text-muted">{{ forloop.counter }}</td>
                                         <td>{{ product.product_name }}</td>
                                         <td class="text-end">
@@ -156,9 +257,25 @@
                                             <input type="number" name="cost_{{ product.pk }}" min="0" step="0.01"
                                                    class="form-control form-control-sm text-end price-input" value="{{ cost|floatformat:2 }}">
                                         </td>
-                                        <td class="pe-3">
+                                        <td>
                                             <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
                                                    class="form-control form-control-sm text-end qty-input" value="{{ qty }}" placeholder="0">
+                                        </td>
+                                        <td class="pe-3 actions-cell">
+                                            <!-- No nested forms inside the bulk <form>: JS posts these. -->
+                                            <div class="swipe-actions">
+                                                <button type="button" class="sd-icon-btn edit-item"
+                                                        title="Edit this product on the sheet"
+                                                        data-pk="{{ product.pk }}"
+                                                        data-name="{{ product.product_name }}"
+                                                        data-category="{{ product.category|default:'' }}"
+                                                        data-sell="{{ product.selling_price|floatformat:2 }}"
+                                                        data-cost="{{ product.cost_price|floatformat:2 }}">✏️</button>
+                                                <button type="button" class="sd-icon-btn danger delete-item"
+                                                        title="Delete this item from the product list"
+                                                        data-pk="{{ product.pk }}"
+                                                        data-name="{{ product.product_name|escapejs }}">🗑</button>
+                                            </div>
                                         </td>
                                     </tr>
                                     {% endfor %}
@@ -434,15 +551,178 @@
             }
         });
 
-        document.querySelectorAll('.category-search').forEach(function (input) {
-            input.addEventListener('input', function () {
-                var q = input.value.trim().toLowerCase();
-                var panel = document.querySelector(input.dataset.collapse);
-                if (!panel) return;
-                panel.querySelectorAll('tbody tr').forEach(function (tr) {
-                    var name = tr.children[1] ? tr.children[1].textContent.toLowerCase() : '';
-                    tr.style.display = name.indexOf(q) === -1 ? 'none' : '';
+        // ------------------------------------------------------------------
+        // Sheet filtering: one global search across every category, plus the
+        // per-category boxes (the global one wins while it has text).
+        function applySheetFilter() {
+            var gEl = document.getElementById('globalSearch');
+            var g = gEl ? gEl.value.trim().toLowerCase() : '';
+            var matches = 0;
+            document.querySelectorAll('.category-section').forEach(function (section) {
+                var local = section.querySelector('.category-search');
+                var q = g || (local ? local.value.trim().toLowerCase() : '');
+                var panel = section.querySelector('.collapse');
+                if (panel) {
+                    if (g && !panel.classList.contains('show')) {
+                        panel.setAttribute('data-was-closed', '1');
+                        panel.classList.add('show');
+                    } else if (!g && panel.getAttribute('data-was-closed') === '1') {
+                        panel.classList.remove('show');
+                        panel.removeAttribute('data-was-closed');
+                    }
+                }
+                var visible = 0;
+                section.querySelectorAll('tbody tr').forEach(function (tr) {
+                    var hay = (tr.dataset.name ||
+                               (tr.children[1] ? tr.children[1].textContent : '')).toLowerCase();
+                    var match = !q || hay.indexOf(q) !== -1;
+                    tr.style.display = match ? 'none' : '';
+                    if (match) visible++;
                 });
+                matches += visible;
+                section.style.display = visible ? '' : 'none';
+            });
+            var count = document.getElementById('globalSearchCount');
+            if (count) count.textContent = g ? matches + ' match' + (matches === 1 ? '' : 'es') : '';
+            var empty = document.getElementById('noMatches');
+            if (empty) {
+                empty.classList.toggle('d-none', !(g && matches === 0));
+                var q2 = document.getElementById('noMatchesQuery');
+                if (q2) q2.textContent = g;
+            }
+        }
+
+        var globalSearch = document.getElementById('globalSearch');
+        if (globalSearch) globalSearch.addEventListener('input', applySheetFilter);
+        document.querySelectorAll('.category-search').forEach(function (input) {
+            input.addEventListener('input', applySheetFilter);
+        });
+
+        // ------------------------------------------------------------------
+        // Standalone POSTs: sheet rows live inside the bulk <form> and forms
+        // can't nest, so each action posts its own generated form.
+        var SALE_DATE = '{{ sale_date|date:"Y-m-d" }}';
+        function postFields(fields) {
+            var csrf = document.querySelector(
+                'form[data-no-enter] input[name="csrfmiddlewaretoken"]');
+            var form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '{% url "daily_sales" %}';
+            Object.keys(fields).forEach(function (key) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = key;
+                input.value = fields[key];
+                form.appendChild(input);
+            });
+            var token = document.createElement('input');
+            token.type = 'hidden';
+            token.name = 'csrfmiddlewaretoken';
+            token.value = csrf ? csrf.value : '';
+            form.appendChild(token);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        // Delete a sheet item (duplicate / wrong category).
+        document.querySelectorAll('.delete-item').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var ok = confirm('Delete "' + btn.dataset.name + '" from the product list?\n\n' +
+                    'It disappears from every sheet, and its recorded sales, ' +
+                    'prices and history are removed with it.\n\n' +
+                    'Cancel keeps it.');
+                if (!ok) return;
+                postFields({
+                    entry_type: 'delete_item',
+                    product_id: btn.dataset.pk,
+                    sale_date: SALE_DATE
+                });
+            });
+        });
+
+        // Swipe-left reveal: dragging a row sideways uncovers its actions.
+        var openRow = null;
+        function closeActions() {
+            if (openRow) { openRow.classList.remove('row-open'); openRow = null; }
+        }
+        function openActions(row) {
+            if (openRow && openRow !== row) openRow.classList.remove('row-open');
+            row.classList.add('row-open');
+            openRow = row;
+        }
+
+        document.querySelectorAll('.sheet-row').forEach(function (row) {
+            var sx = null, sy = null, tracking = false;
+            row.addEventListener('pointerdown', function (e) {
+                sx = e.clientX; sy = e.clientY; tracking = true;
+            });
+            row.addEventListener('pointermove', function (e) {
+                if (!tracking) return;
+                var dx = e.clientX - sx, dy = e.clientY - sy;
+                if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy)) return;
+                tracking = false;
+                if (dx < 0) openActions(row);
+                else if (openRow === row) closeActions();
+            });
+            ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (evt) {
+                row.addEventListener(evt, function () { tracking = false; });
+            });
+            row.addEventListener('click', function (e) {
+                if (e.target.closest('.swipe-actions') || e.target.closest('.edit-row')) return;
+                if (openRow === row) closeActions();
+            });
+        });
+        document.addEventListener('click', function (e) {
+            if (openRow && !e.target.closest('.sheet-row')) closeActions();
+        });
+
+        // Inline edit: the shared panel is cloned directly under the row.
+        var editRow = null;
+        function closeEdit() {
+            if (editRow && editRow.parentNode) editRow.parentNode.removeChild(editRow);
+            editRow = null;
+        }
+        document.querySelectorAll('.edit-item').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                closeEdit();
+                var row = btn.closest('tr');
+                var tpl = document.getElementById('editRowTemplate');
+                if (!tpl || !row) return;
+                var tr = tpl.content.firstElementChild.cloneNode(true);
+                row.parentNode.insertBefore(tr, row.nextSibling);
+                editRow = tr;
+
+                tr.querySelector('[name="e_name"]').value = btn.dataset.name || '';
+                var select = tr.querySelector('[name="e_category"]');
+                var want = btn.dataset.category || '';
+                var found = false;
+                Array.prototype.forEach.call(select.options, function (o) {
+                    if (o.value === want) { o.selected = true; found = true; }
+                });
+                if (!found && want) {
+                    var opt = document.createElement('option');
+                    opt.value = want; opt.textContent = want; opt.selected = true;
+                    select.appendChild(opt);
+                }
+                tr.querySelector('[name="e_sell"]').value = btn.dataset.sell || '';
+                tr.querySelector('[name="e_cost"]').value = btn.dataset.cost || '';
+
+                tr.querySelector('[data-role="cancel-edit"]').addEventListener('click', function () {
+                    closeEdit();
+                    closeActions();
+                });
+                tr.querySelector('[data-role="save-edit"]').addEventListener('click', function () {
+                    postFields({
+                        entry_type: 'update_item',
+                        product_id: btn.dataset.pk,
+                        sale_date: SALE_DATE,
+                        product_name: tr.querySelector('[name="e_name"]').value,
+                        category: tr.querySelector('[name="e_category"]').value,
+                        selling_price: tr.querySelector('[name="e_sell"]').value,
+                        cost_price: tr.querySelector('[name="e_cost"]').value
+                    });
+                });
+                tr.scrollIntoView({ block: 'nearest' });
             });
         });
 

@@ -11,7 +11,27 @@
         .stat-card { background: linear-gradient(135deg, #0d6efd, #0dcaf0); color: white; }
         .navbar-brand { font-weight: bold; letter-spacing: 1px; }
         .table-responsive { border-radius: 12px; }
+
+        /* --- shadcn-flavoured analytics cards --- */
+        .analytics-card { border: 1px solid #e4e4e7; box-shadow: 0 1px 2px rgba(9,9,11,.04), 0 8px 24px -12px rgba(9,9,11,.18); }
+        .range-toggle .btn { border-radius: 999px; font-weight: 600; font-size: .8rem; }
+        .range-toggle .btn.active { background: #18181b; border-color: #18181b; color: #fff; }
+        .kpi-mini { border: 1px solid #e4e4e7; border-radius: 14px; background: #fff; padding: 14px 16px; }
+        .kpi-mini .kpi-label { font-size: .68rem; letter-spacing: .07em; text-transform: uppercase; color: #a1a1aa; font-weight: 600; }
+        .kpi-mini .kpi-value { font-size: 1.4rem; font-weight: 700; letter-spacing: -.03em; color: #09090b; font-variant-numeric: tabular-nums; }
+        .kpi-mini .kpi-sub { font-size: .75rem; color: #71717a; }
+        .chart-box { position: relative; height: 300px; padding: 10px; border: 1px solid #e4e4e7; border-radius: 14px; background: #fff; }
+        .chart-box.tall { height: 340px; }
+        .chart-title { font-size: .8rem; font-weight: 600; color: #52525b; margin: 0 0 6px 2px; }
+        .top-list { border: 1px solid #e4e4e7; border-radius: 14px; background: #fff; padding: 6px 16px; }
+        .top-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid #f1f1f4; font-size: .875rem; }
+        .top-row:last-child { border-bottom: 0; }
+        .top-rank { width: 22px; height: 22px; border-radius: 7px; background: #f4f4f5; color: #52525b; font-size: .68rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; margin-right: 9px; }
+        .top-units { font-variant-numeric: tabular-nums; font-weight: 700; }
+        .empty-note { color: #a1a1aa; font-size: .85rem; padding: 14px 0; }
+        .insight-chip { display: inline-block; margin-top: 6px; padding: 4px 11px; border-radius: 999px; background: #f4f4f5; border: 1px solid #e4e4e7; color: #3f3f46; font-size: .72rem; font-weight: 600; }
     </style>
+    {% include "tracker/site_styles.html" %}
 </head>
 <body>
     <nav class="navbar navbar-dark bg-dark mb-4 sticky-top">
@@ -63,6 +83,72 @@
                     <button type="submit" class="btn btn-primary btn-lg w-100 px-4">Search</button>
                 </div>
             </form>
+        </div>
+
+        <!-- Sales Analytics: daily / weekly / monthly graphs + pie charts -->
+        <div class="card p-4 mb-4 analytics-card" id="analytics">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <div>
+                    <h5 class="mb-0 fw-bold">Sales Analytics</h5>
+                    <small class="text-muted" id="analytics-range">Which product moves most, and when</small>
+                    <div><span class="insight-chip" id="analytics-peak">&mdash;</span></div>
+                </div>
+                <div class="btn-group range-toggle" role="group" id="range-toggle">
+                    <button type="button" class="btn btn-outline-dark btn-sm active" data-range="day">Daily</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-range="week">Weekly</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-range="month">Monthly</button>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+                <div class="col-6 col-lg-3"><div class="kpi-mini">
+                    <div class="kpi-label">Units sold</div>
+                    <div class="kpi-value" id="kpi-units">0</div>
+                    <div class="kpi-sub" id="kpi-days"></div>
+                </div></div>
+                <div class="col-6 col-lg-3"><div class="kpi-mini">
+                    <div class="kpi-label">Profit</div>
+                    <div class="kpi-value" id="kpi-profit">KSh 0</div>
+                    <div class="kpi-sub" id="kpi-rows"></div>
+                </div></div>
+                <div class="col-6 col-lg-3"><div class="kpi-mini">
+                    <div class="kpi-label">Expenses</div>
+                    <div class="kpi-value" id="kpi-expenses">KSh 0</div>
+                    <div class="kpi-sub">from day totals</div>
+                </div></div>
+                <div class="col-6 col-lg-3"><div class="kpi-mini">
+                    <div class="kpi-label">Net</div>
+                    <div class="kpi-value" id="kpi-net">KSh 0</div>
+                    <div class="kpi-sub">profit &minus; expenses</div>
+                </div></div>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-lg-7">
+                    <div class="chart-title">Units sold by product</div>
+                    <div class="chart-box tall"><canvas id="chart-bar"></canvas></div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="chart-title">Share of units (top products)</div>
+                    <div class="chart-box tall"><canvas id="chart-share"></canvas></div>
+                </div>
+                <div class="col-lg-7">
+                    <div class="chart-title">Daily trend &mdash; top products</div>
+                    <div class="chart-box"><canvas id="chart-line"></canvas></div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="chart-title">Profit by shop</div>
+                    <div class="chart-box"><canvas id="chart-shops"></canvas></div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="chart-title">When things move &mdash; units by day of week <span class="fw-normal">(last 28 days)</span></div>
+                    <div class="chart-box"><canvas id="chart-weekday"></canvas></div>
+                </div>
+                <div class="col-lg-7">
+                    <div class="chart-title">Top products for this range</div>
+                    <div class="top-list" id="top-products"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Shop Profits by Date -->
@@ -195,5 +281,178 @@
 
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    {{ analytics_json|json_script:"sd-analytics" }}
+    <script>
+        (function () {
+            var payload = document.getElementById('sd-analytics');
+            if (!payload || typeof Chart === 'undefined') return;
+            var ANALYTICS = JSON.parse(payload.textContent);
+            var PALETTE = ['#18181b', '#3f3f46', '#71717a', '#2563eb', '#16a34a',
+                           '#d97706', '#dc2626', '#0891b2', '#9333ea', '#65a30d'];
+            var GRID = 'rgba(24, 24, 27, .07)';
+
+            Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+            Chart.defaults.color = '#71717a';
+
+            function money(v) {
+                return 'KSh ' + Number(v).toLocaleString('en-KE', {
+                    minimumFractionDigits: 2, maximumFractionDigits: 2
+                });
+            }
+            function num(v) {
+                return Number(v).toLocaleString('en-KE', { maximumFractionDigits: 1 });
+            }
+
+            var charts = {};
+            function draw(id, config) {
+                if (charts[id]) charts[id].destroy();
+                charts[id] = new Chart(document.getElementById(id), config);
+            }
+            function pieConfig(data, moneyTooltip) {
+                return {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{ data: data.values, backgroundColor: PALETTE,
+                                     borderColor: '#ffffff', borderWidth: 2 }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false, cutout: '58%',
+                        plugins: {
+                            legend: { position: 'right', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, font: { size: 11 } } },
+                            tooltip: { callbacks: { label: function (c) {
+                                return ' ' + (moneyTooltip ? money(c.parsed) : num(c.parsed) + ' units');
+                            } } }
+                        }
+                    }
+                };
+            }
+
+            function render(range) {
+                var d = ANALYTICS[range];
+                if (!d) return;
+
+                document.getElementById('analytics-range').textContent =
+                    d.label + ' \u00b7 ' + d.start + ' to ' + d.end;
+                document.getElementById('analytics-peak').textContent = d.peak
+                    ? 'Busiest: ' + d.peak.label + ' \u00b7 ' + num(d.peak.units) + ' units'
+                    : 'No sales in this range';
+                document.getElementById('kpi-units').textContent = num(d.units);
+                document.getElementById('kpi-days').textContent =
+                    d.active_days + ' active day' + (d.active_days === 1 ? '' : 's');
+                document.getElementById('kpi-profit').textContent = money(d.profit);
+                document.getElementById('kpi-rows').textContent = d.rows + ' sale rows';
+                document.getElementById('kpi-expenses').textContent = money(d.expenses);
+                document.getElementById('kpi-net').textContent = money(d.net);
+
+                draw('chart-bar', {
+                    type: 'bar',
+                    data: {
+                        labels: d.bar.labels,
+                        datasets: [{ label: 'Units', data: d.bar.values,
+                                     backgroundColor: '#18181b', borderRadius: 6, maxBarThickness: 34 }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+                        plugins: { legend: { display: false },
+                                   tooltip: { callbacks: { label: function (c) { return ' ' + num(c.parsed.x) + ' units'; } } } },
+                        scales: {
+                            x: { grid: { color: GRID }, border: { display: false }, ticks: { precision: 0 } },
+                            y: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 11 } } }
+                        }
+                    }
+                });
+
+                draw('chart-share', pieConfig({ labels: d.pie.labels, values: d.pie.values }, false));
+
+                var lineWrap = document.getElementById('chart-line').parentNode;
+                if (d.line.labels.length < 2) {
+                    lineWrap.style.display = 'none';
+                    if (charts['chart-line']) { charts['chart-line'].destroy(); delete charts['chart-line']; }
+                } else {
+                    lineWrap.style.display = '';
+                    draw('chart-line', {
+                        type: 'line',
+                        data: { labels: d.line.labels, datasets: d.line.datasets.map(function (s, i) {
+                            return {
+                                label: s.label, data: s.data,
+                                borderColor: PALETTE[i % PALETTE.length],
+                                backgroundColor: PALETTE[i % PALETTE.length],
+                                borderWidth: 2, tension: .35, pointRadius: 2.5, pointHoverRadius: 5
+                            };
+                        }) },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } } },
+                            scales: {
+                                x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0 } },
+                                y: { grid: { color: GRID }, border: { display: false }, ticks: { precision: 0 } }
+                            }
+                        }
+                    });
+                }
+
+                draw('chart-shops', pieConfig({ labels: d.shops.labels, values: d.shops.values }, true));
+
+                var list = document.getElementById('top-products');
+                list.innerHTML = '';
+                if (!d.top.length) {
+                    list.innerHTML = '<div class="empty-note">No sales recorded for this range yet.</div>';
+                    return;
+                }
+                d.top.forEach(function (p, i) {
+                    var row = document.createElement('div');
+                    row.className = 'top-row';
+                    row.innerHTML =
+                        '<span><span class="top-rank">' + (i + 1) + '</span>' +
+                        '<strong>' + p.name + '</strong></span>' +
+                        '<span style="display:flex; gap:16px;">' +
+                        '<span class="top-units">' + num(p.units) + ' units</span>' +
+                        '<span style="color:#16a34a; font-variant-numeric:tabular-nums;">' + money(p.profit) + '</span>' +
+                        '</span>';
+                    list.appendChild(row);
+                });
+            }
+
+            document.querySelectorAll('#range-toggle button').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    document.querySelectorAll('#range-toggle button').forEach(function (b) {
+                        b.classList.remove('active');
+                    });
+                    btn.classList.add('active');
+                    render(btn.dataset.range);
+                });
+            });
+
+            var wd = ANALYTICS.weekday;
+            if (wd && wd.values.length) {
+                var best = Math.max.apply(null, wd.values);
+                draw('chart-weekday', {
+                    type: 'bar',
+                    data: {
+                        labels: wd.labels,
+                        datasets: [{ label: 'Units', data: wd.values,
+                                     backgroundColor: wd.values.map(function (v) {
+                                         return best > 0 && v === best ? '#18181b' : '#d4d4d8';
+                                     }),
+                                     borderRadius: 6, maxBarThickness: 30 }]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { display: false },
+                                   tooltip: { callbacks: { label: function (c) { return ' ' + num(c.parsed.y) + ' units'; } } } },
+                        scales: {
+                            x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 11 } } },
+                            y: { grid: { color: GRID }, border: { display: false }, ticks: { precision: 0 } }
+                        }
+                    }
+                });
+            }
+
+            render('day');
+        })();
+    </script>
 </body>
 </html>

@@ -1,6 +1,8 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.db.models import Sum, Q
-from django.http import HttpResponse, JsonResponse
+from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
+from django.db.models import Count, Sum, Q
+from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import reverse
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
@@ -164,6 +166,7 @@ def dashboard(request):
         'shop_totals_list': shop_totals_list,
         'shop_grand_total': grand_total,
         'shops': SHOPS,
+        'analytics_json': json.dumps(_build_analytics()),
     })
 
 def views_product_detail(request, pk):
@@ -277,6 +280,44 @@ def daily_sales(request):
             if selected in SHOPS:
                 request.session['daily_sales_shop'] = selected
             return redirect(reverse('daily_sales'))
+
+        # Delete a product row from the sheet (duplicate / wrong-category
+        # clean-up). Cascades to its sales, price overrides and transactions.
+        if request.POST.get('entry_type') == 'delete_item':
+            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
+            try:
+                pk = int(request.POST.get('product_id') or 0)
+            except (TypeError, ValueError):
+                pk = 0
+            product = Product.objects.filter(pk=pk).first()
+            if product is not None:
+                product.delete()
+            return redirect(f"{reverse('daily_sales')}?deleted=1&date={sale_date}")
+
+        # Inline edit of a sheet product: name / category / default prices,
+        # saved straight from the row's edit panel.
+        if request.POST.get('entry_type') == 'update_item':
+            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
+            try:
+                pk = int(request.POST.get('product_id') or 0)
+            except (TypeError, ValueError):
+                pk = 0
+            product = Product.objects.filter(pk=pk).first()
+            if product is not None:
+                name = (request.POST.get('product_name') or '').strip()
+                category = (request.POST.get('category') or '').strip()
+                selling = _parse_decimal(request.POST.get('selling_price'))
+                cost = _parse_decimal(request.POST.get('cost_price'))
+                if name:
+                    product.product_name = name
+                if category:
+                    product.category = category
+                if selling is not None:
+                    product.selling_price = selling
+                if cost is not None:
+                    product.cost_price = cost
+                product.save()
+            return redirect(f"{reverse('daily_sales')}?edited=1&date={sale_date}")
 
         if request.POST.get('entry_type') == 'bulk':
             shop = request.session.get('daily_sales_shop', '')
@@ -478,6 +519,8 @@ def daily_sales(request):
         'today_iso': date.today().strftime('%Y-%m-%d'),
         'categories_data': categories_data,
         'saved': saved,
+        'deleted': request.GET.get('deleted') == '1',
+        'edited': request.GET.get('edited') == '1',
         'sales_categories': SALES_CATEGORIES,
         'manual_categories': manual_categories,
         'total_expenses': total_expenses,
@@ -864,11 +907,22 @@ def daily_sales_report(request):
     })
 
 def daily_sales_report_export(request):
+    """Excel for the report period, with Chambers Point kept separate.
+
+    ``?shop=chambers`` downloads Chambers Point on its own; the default
+    download is every other shop, so the combined workbook never mixes the
+    two (same split the day export already uses).
+    """
+    chambers_only = request.GET.get('shop') == 'chambers'
     start, end, period_label = _report_period(request)
     sales = (
         DailySale.objects.filter(date__gte=start, date__lte=end)
         .select_related('product').order_by('shop', 'product__product_name')
     )
+    if chambers_only:
+        sales = sales.filter(shop=CHAMBERS_SHOP)
+    else:
+        sales = sales.exclude(shop=CHAMBERS_SHOP)
     columns = ['Shop', 'Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit', 'Date']
     rows = [{
         'Shop': s.shop or 'Unassigned',
@@ -930,7 +984,7 @@ def daily_sales_report_export(request):
                 'Date': '',
             })
         rows.append({
-            'Shop': 'ALL SHOPS',
+            'Shop': 'CHAMBERS POINT' if chambers_only else 'ALL SHOPS',
             'Product': 'GRAND NET PROFIT',
             'Category': '',
             'Selling Price': None,
@@ -949,7 +1003,8 @@ def daily_sales_report_export(request):
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     safe = period_label.replace('/', '-').replace(' ', '_').replace('→', 'to')
-    response['Content-Disposition'] = f'attachment; filename="report_{safe}.xlsx"'
+    prefix = 'chambers_report_' if chambers_only else 'report_'
+    response['Content-Disposition'] = f'attachment; filename="{prefix}{safe}.xlsx"'
     return response
 
 
@@ -1038,3 +1093,269 @@ def dashboard_export(request):
     safe_range = f"{range_start}_to_{range_end}"
     response['Content-Disposition'] = f'attachment; filename="net_shop_profits_{safe_range}.xlsx"'
     return response
+
+
+# ---------------------------------------------------------------------------
+# Admin: shadcn-styled shop sheets (/admin/shops/<shop>/)
+# ---------------------------------------------------------------------------
+
+def _shop_sheet_dates(shop):
+    """Every date this shop has a sheet for, newest first, with its net.
+
+    Drives the sheet chips and the prev/next navigation: a sheet exists when
+    the shop has sales rows or manually-typed day totals for that date.
+    """
+    profit_by_date = dict(
+        DailySale.objects.filter(shop=shop)
+        .values('date')
+        .annotate(v=Sum('profit'))
+        .values_list('date', 'v')
+    )
+    expense_by_date = dict(
+        DayTotals.objects.filter(shop=shop).values_list('date', 'total_expenditure')
+    )
+    sheets = []
+    for d in sorted(set(profit_by_date) | set(expense_by_date), reverse=True):
+        profit = profit_by_date.get(d) or Decimal('0.00')
+        expenses = expense_by_date.get(d) or Decimal('0.00')
+        sheets.append({'date': d, 'profit': profit, 'expenses': expenses,
+                       'net': profit - expenses})
+    return sheets
+
+
+@staff_member_required
+def admin_shop_sheet(request, shop):
+    """One shop's Excel-style sheet for a single day: view, add and delete rows."""
+    if shop not in SHOPS:
+        raise Http404('Unknown shop')
+
+    def _back(target):
+        return f"{reverse('admin_shop_sheet', args=[shop])}?date={target.isoformat()}"
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        sheet_date = _parse_date(request.POST.get('date'))
+
+        if action == 'add':
+            qty = _parse_decimal(request.POST.get('qty'))
+            try:
+                product = Product.objects.get(pk=int(request.POST.get('product') or 0))
+            except (Product.DoesNotExist, ValueError, TypeError):
+                product = None
+            if product is None or qty is None or qty <= 0:
+                messages.error(request, 'Pick a product and a quantity greater than zero.')
+            else:
+                sell = _parse_decimal(request.POST.get('sell'))
+                cost = _parse_decimal(request.POST.get('cost'))
+                if sell is None:
+                    sell = _shop_price_overrides(shop).get(product.pk, product.selling_price)
+                if cost is None:
+                    cost = _shop_cost_overrides(shop).get(product.pk, product.cost_price)
+                sale, created = DailySale.objects.get_or_create(
+                    product=product, shop=shop, date=sheet_date,
+                    defaults={'quantity_sold': qty, 'sell_price': sell,
+                              'cost_price': cost},
+                )
+                if not created:
+                    sale.quantity_sold = qty
+                    sale.sell_price = sell
+                    sale.cost_price = cost
+                    sale.save()
+                verb = 'Added' if created else 'Updated'
+                messages.success(
+                    request,
+                    f"{verb} {product.product_name} - {qty} units for {shop} "
+                    f"on {sheet_date:%d %b %Y}.",
+                )
+            return redirect(_back(sheet_date))
+
+        if action == 'delete':
+            sale = (DailySale.objects
+                    .filter(pk=request.POST.get('sale'), shop=shop)
+                    .select_related('product').first())
+            if sale is None:
+                messages.error(request, 'That row is already gone.')
+            else:
+                name = sale.product.product_name
+                sale.delete()
+                messages.success(
+                    request,
+                    f"Deleted {name} from {shop} on {sheet_date:%d %b %Y}.",
+                )
+            return redirect(_back(sheet_date))
+
+        if action == 'totals':
+            DayTotals.objects.update_or_create(
+                shop=shop, date=sheet_date,
+                defaults={
+                    'total_sales': _parse_decimal(request.POST.get('total_sales')) or Decimal('0.00'),
+                    'total_profit': _parse_decimal(request.POST.get('total_profit')) or Decimal('0.00'),
+                    'total_expenditure': _parse_decimal(request.POST.get('total_expenditure')) or Decimal('0.00'),
+                },
+            )
+            messages.success(request, f"Day totals saved for {shop} on {sheet_date:%d %b %Y}.")
+            return redirect(_back(sheet_date))
+
+        return redirect(_back(sheet_date))
+
+    # ---- GET ------------------------------------------------------------
+    sheet_date = _parse_date(request.GET.get('date'))
+    sheets = _shop_sheet_dates(shop)
+    sheet_dates = [s['date'] for s in sheets]
+    prev_date = next((d for d in reversed(sheet_dates) if d < sheet_date), None)
+    next_date = next((d for d in sheet_dates if d > sheet_date), None)
+
+    rows = list(
+        DailySale.objects.filter(shop=shop, date=sheet_date)
+        .select_related('product')
+        .order_by('product__order', 'product__product_name')
+    )
+    total_units = sum((r.quantity_sold for r in rows), Decimal('0.00'))
+    total_sales_value = sum((r.sell_price * r.quantity_sold for r in rows), Decimal('0.00'))
+    total_profit = sum((r.profit for r in rows), Decimal('0.00'))
+    day_totals = DayTotals.objects.filter(shop=shop, date=sheet_date).first()
+    expenses = day_totals.total_expenditure if day_totals else Decimal('0.00')
+
+    def _money(value):
+        return f"{value:0.2f}" if value else ''
+
+    return render(request, 'tracker/admin_shop_sheet.html', {
+        'shop': shop,
+        'shops': SHOPS,
+        'sheet_date': sheet_date,
+        'sheet_date_iso': sheet_date.isoformat(),
+        'prev_date': prev_date,
+        'next_date': next_date,
+        'chips': sheets[:21],
+        'rows': rows,
+        'products': _sale_products(),
+        'total_units': total_units,
+        'total_sales_value': total_sales_value,
+        'total_profit': total_profit,
+        'expenses': expenses,
+        'net_profit': total_profit - expenses,
+        'form_sales': _money(day_totals.total_sales) if day_totals else '',
+        'form_profit': _money(day_totals.total_profit) if day_totals else '',
+        'form_expenses': _money(expenses),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Dashboard analytics (daily / weekly / monthly graphs + pie charts)
+# ---------------------------------------------------------------------------
+
+def _build_analytics():
+    """Sales analytics payload consumed by the dashboard Chart.js charts.
+
+    Three ranges (today, last 7 days, last 30 days), each with a per-product
+    bar chart, a share pie, a daily trend line for the top products, a
+    profit-by-shop pie and the KPI numbers shown next to the charts.
+    Data source is DailySale (per-item rows); audit Transactions are not
+    itemised by date in the same way, so they stay out of these graphs.
+    """
+    today = date.today()
+    ranges = [
+        ('day', 'Today', today, today),
+        ('week', 'Last 7 days', today - timedelta(days=6), today),
+        ('month', 'Last 30 days', today - timedelta(days=29), today),
+    ]
+    payload = {}
+    for key, label, start, end in ranges:
+        sales = DailySale.objects.filter(date__gte=start, date__lte=end)
+        by_product = (
+            sales.values('product_id', 'product__product_name')
+            .annotate(units=Sum('quantity_sold'), profit=Sum('profit'))
+            .order_by('-units', 'product__product_name')
+        )
+        products = list(by_product[:12])
+        bar_labels = [p['product__product_name'] for p in products]
+        bar_values = [float(p['units'] or 0) for p in products]
+
+        pie_labels = bar_labels[:6]
+        pie_values = bar_values[:6]
+        if len(bar_values) > 6:
+            pie_labels = pie_labels + ['Other']
+            pie_values = pie_values + [round(sum(bar_values[6:]), 2)]
+
+        dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        line_datasets = []
+        for p in list(by_product[:5]):
+            series = dict(
+                sales.filter(product_id=p['product_id'])
+                .values('date')
+                .annotate(units=Sum('quantity_sold'))
+                .values_list('date', 'units')
+            )
+            line_datasets.append({
+                'label': p['product__product_name'],
+                'data': [float(series.get(d) or 0) for d in dates],
+            })
+
+        by_shop = (
+            sales.values('shop')
+            .annotate(profit=Sum('profit'))
+            .order_by('-profit')
+        )
+        agg = sales.aggregate(units=Sum('quantity_sold'), profit=Sum('profit'),
+                              rows=Count('id'))
+        expenses = (
+            DayTotals.objects.filter(date__gte=start, date__lte=end)
+            .aggregate(v=Sum('total_expenditure'))['v'] or Decimal('0.00')
+        )
+        profit = agg['profit'] or Decimal('0.00')
+
+        # Busiest date in the range ("when" things move within the period).
+        per_date = dict(
+            sales.values('date').annotate(u=Sum('quantity_sold'))
+            .values_list('date', 'u')
+        )
+        peak = None
+        if per_date:
+            peak_date = max(per_date, key=lambda d: per_date[d] or 0)
+            peak = {
+                'date': peak_date.isoformat(),
+                'label': peak_date.strftime('%a, %d %b'),
+                'units': float(per_date[peak_date] or 0),
+            }
+
+        payload[key] = {
+            'peak': peak,
+            'label': label,
+            'start': start.isoformat(),
+            'end': end.isoformat(),
+            'units': float(agg['units'] or 0),
+            'profit': float(profit),
+            'expenses': float(expenses),
+            'net': float(profit - expenses),
+            'rows': agg['rows'] or 0,
+            'active_days': sales.values('date').distinct().count(),
+            'top': [{'name': p['product__product_name'],
+                     'units': float(p['units'] or 0),
+                     'profit': float(p['profit'] or 0)} for p in products[:8]],
+            'bar': {'labels': bar_labels, 'values': bar_values},
+            'pie': {'labels': pie_labels, 'values': pie_values},
+            'line': {
+                'labels': [d.strftime('%d %b') for d in dates],
+                'datasets': line_datasets,
+            },
+            'shops': {
+                'labels': [r['shop'] or 'Unassigned' for r in by_shop],
+                'values': [float(r['profit'] or 0) for r in by_shop],
+            },
+        }
+
+    # Day-of-week rhythm over a fixed trailing window so "when in the week
+    # products move" stays comparable regardless of the range toggle.
+    weekday_units = [0.0] * 7
+    for row in (
+        DailySale.objects.filter(date__gte=today - timedelta(days=27))
+        .values('date')
+        .annotate(u=Sum('quantity_sold'))
+    ):
+        weekday_units[row['date'].weekday()] += float(row['u'] or 0)
+    payload['weekday'] = {
+        'labels': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        'values': weekday_units,
+        'window': 'Last 28 days',
+    }
+    return payload
