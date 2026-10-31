@@ -872,6 +872,21 @@ def daily_sales_report(request):
             'units': uu,
         })
 
+    # Per-day-per-product-per-shop profit breakdown – a list of
+    # [shop, product_name, date_iso, profit] rows, JSON-serialised verbatim.
+    product_profit_by_day = []
+    for r in (
+        sales.values('shop', 'product__product_name', 'date')
+        .annotate(profit=Sum('profit'))
+        .order_by('shop', 'product__product_name', 'date')
+    ):
+        product_profit_by_day.append([
+            r['shop'] or 'Unassigned',
+            r['product__product_name'],
+            r['date'].isoformat(),
+            float(r['profit'] or 0),
+        ])
+    # Daily labels for the time-series chart
     sale_by_date = {
         r['date']: r['subtotal']
         for r in sales.values('date').annotate(subtotal=Sum('profit')).order_by('date')
@@ -904,6 +919,7 @@ def daily_sales_report(request):
         'month_first': date.today().replace(day=1).strftime('%Y-%m-%d'),
         'current_month': date.today().strftime('%Y-%m'),
         'chart': chart,
+        'product_profit_by_day': product_profit_by_day,
     })
 
 def daily_sales_report_export(request):

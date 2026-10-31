@@ -126,7 +126,60 @@
         </div>
     </div>
 
+    <!-- Daily product-profit breakdown -->
+    <div class="row g-3 mb-4">
+        <div class="col-12">
+            <div class="card p-4" style="max-width: 100%;">
+                <h6 class="fw-bold mb-3">Profit per product per shop per day</h6>
+                <p class="text-muted small mb-3">Filter below to narrow the view.</p>
+                <div class="row g-2 mb-3">
+                    <div class="col-6 col-sm-3">
+                        <label class="form-label tiny text-muted">Shop</label>
+                        <select id="reportShopFilter" class="form-select form-select-sm">
+                            <option value="">All shops</option>
+                            {% for s in shops_data %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-6 col-sm-3">
+                        <label class="form-label tiny text-muted">Product</label>
+                        <select id="reportProductFilter" class="form-select form-select-sm">
+                            <option value="">All products</option>
+                            {% for shop in shops_data %}
+                                {% for r in shop.product_rows %}
+                                    <option value="{{ r.product__product_name }}">{{ r.product__product_name }}</option>
+                                {% endfor %}
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="table-responsive" style="max-height: 500px; overflow:auto;">
+                    <table class="table table-sm align-middle mb-0" id="reportProductProfitTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th class="ps-3">Date</th>
+                                <th class="text-end">Product</th>
+                                <th class="pe-3 text-end">Shop</th>
+                                <th class="text-end">Profit</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for key, profit in product_profit_by_day.items %}
+                            <tr>
+                                <td class="fw-semibold">{{ key.2 }}</td>
+                                <td>{{ key.1 }}</td>
+                                <td>{{ key.0|default:"Unassigned" }}</td>
+                                <td class="text-end text-success">KSh {{ profit|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     {{ chart|json_script:"report-chart" }}
+    {{ product_profit_by_day|json_script:"sd-product-profit-by-day" }}
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script>
@@ -175,6 +228,52 @@
         });
     })();
     </script>
+    <script>
+    // Initialise filter state.
+    var selectedShop = '';
+    var selectedProduct = '';
+
+    function renderProductProfitTable() {
+        var rows = [];
+        for (var key in productProfitByDay) {
+            if (key && key[0] && key[1] && key[2]) {
+                var matchShop = selectedShop ? key[0] === selectedShop : true;
+                var matchProduct = selectedProduct ? key[1] === selectedProduct : true;
+                if (matchShop && matchProduct) {
+                    rows.push({ date: key[2], product: key[1], shop: key[0], profit: key[3] });
+                }
+            }
+        }
+        // sort by date
+        rows.sort(function (a, b) { return a.date.localeCompare(b.date); });
+        var tbody = document.querySelector('#reportProductProfitTable tbody');
+        tbody.innerHTML = '';
+        rows.forEach(function (r) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td class="fw-semibold">' + r.date + '</td>' +
+                           '<td>' + r.product + '</td>' +
+                           '<td>' + r.shop + '</td>' +
+                           '<td class="text-end text-success">KSh ' + r.profit.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>';
+            tbody.appendChild(tr);
+        });
+    }
+
+    // Sync the Django‑passed data into the JS variable.
+    var productProfitByDay = {};
+    try { productProfitByDay = JSON.parse(document.getElementById('sd-product-profit-by-day').textContent || '{}'); } catch(e) {}
+
+    document.getElementById('reportShopFilter').addEventListener('change', function() {
+        selectedShop = this.value;
+        renderProductProfitTable();
+    });
+    document.getElementById('reportProductFilter').addEventListener('change', function() {
+        selectedProduct = this.value;
+        renderProductProfitTable();
+    });
+
+    renderProductProfitTable();
+    </script>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
