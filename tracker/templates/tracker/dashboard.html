@@ -160,7 +160,10 @@
         <div class="card p-4 mb-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h5 class="mb-0 fw-bold">Shop Net Profits by Date</h5>
-                <a href="{% url 'dashboard_export' %}?range_start={{ range_start|date:'Y-m-d' }}&range_end={{ range_end|date:'Y-m-d' }}" class="btn btn-success btn-sm">⬇ Download Excel</a>
+                <div class="d-flex gap-2 flex-wrap">
+                    <a href="{% url 'dashboard_export' %}?range_start={{ range_start|date:'Y-m-d' }}&range_end={{ range_end|date:'Y-m-d' }}" class="btn btn-success btn-sm">⬇ All Shops — excludes Chambers Point</a>
+                    <a href="{% url 'dashboard_export' %}?shop=chambers&range_start={{ range_start|date:'Y-m-d' }}&range_end={{ range_end|date:'Y-m-d' }}" class="btn btn-info btn-sm">⬇ Chambers Point</a>
+                </div>
             </div>
             <form method="GET" action="/" class="row g-2 mb-3">
                 <input type="hidden" name="q" value="{{ query }}">

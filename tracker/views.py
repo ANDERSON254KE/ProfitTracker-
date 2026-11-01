@@ -1048,6 +1048,11 @@ def dashboard_export(request):
     if range_end < range_start:
         range_start, range_end = range_end, range_start
 
+    only_chambers = (request.GET.get('shop') or '').strip().lower() in {
+        'chambers', 'chambers point', 'chambers_point'
+    }
+    export_shops = [CHAMBERS_SHOP] if only_chambers else ALL_SHOPS_EXPORT
+
     sales = DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
 
     # Aggregate profit by date and shop
@@ -1073,9 +1078,9 @@ def dashboard_export(request):
         exp_map[d][r['shop']] = float(r['total_expenditure'])
 
     # Build rows: each value is NET profit (profit minus expenses)
-    columns = ['Date'] + SHOPS + ['Day Total (Net)']
+    columns = ['Date'] + export_shops + ['Day Total (Net)']
     rows = []
-    totals = {s: 0.0 for s in SHOPS}
+    totals = {s: 0.0 for s in export_shops}
     grand_total = 0.0
     grand_expenses = 0.0
 
@@ -1083,7 +1088,7 @@ def dashboard_export(request):
     while cur <= range_end:
         row_data = {'Date': cur}
         day_total = 0.0
-        for s in SHOPS:
+        for s in export_shops:
             val = profit_map.get(cur, {}).get(s, 0.0)
             exp = exp_map.get(cur, {}).get(s, 0.0)
             net = val - exp
@@ -1098,18 +1103,18 @@ def dashboard_export(request):
 
     # Add totals row
     total_row = {'Date': 'TOTAL NET PROFIT'}
-    for s in SHOPS:
+    for s in export_shops:
         total_row[s] = totals[s]
     total_row['Day Total (Net)'] = grand_total
     rows.append(total_row)
 
     # Add expenses row for context
-    exp_totals = {s: 0.0 for s in SHOPS}
+    exp_totals = {s: 0.0 for s in export_shops}
     for d, shops in exp_map.items():
-        for s in SHOPS:
+        for s in export_shops:
             exp_totals[s] += shops.get(s, 0.0)
     exp_row = {'Date': 'TOTAL EXPENSES'}
-    for s in SHOPS:
+    for s in export_shops:
         exp_row[s] = exp_totals[s]
     exp_row['Day Total (Net)'] = grand_expenses
     rows.append(exp_row)
@@ -1123,7 +1128,10 @@ def dashboard_export(request):
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     safe_range = f"{range_start}_to_{range_end}"
-    response['Content-Disposition'] = f'attachment; filename="net_shop_profits_{safe_range}.xlsx"'
+    shop_slug = 'chambers_point' if only_chambers else 'all_other_shops'
+    response['Content-Disposition'] = (
+        f'attachment; filename="net_shop_profits_{shop_slug}_{safe_range}.xlsx"'
+    )
     return response
 
 
