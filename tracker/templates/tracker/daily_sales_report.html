@@ -21,7 +21,7 @@
         </div>
     </nav>
 
-    <div class="container container-md">
+    <div class="container container-md px-3">
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h2 class="h4 fw-bold mb-0">📊 Sales Report</h2>
             <div class="d-flex gap-2 flex-wrap">
@@ -33,12 +33,13 @@
         <!-- Filters -->
         <div class="card p-3 mb-4">
             <div class="row g-2 align-items-end">
+                <div class="col-12"><small class="text-muted d-block mb-1">Date range</small>
                 <div class="col-12 col-sm-auto">
                     <label class="form-label small text-muted mb-1">Date range</label>
                     <form method="GET" action="{% url 'daily_sales_report' %}" class="d-flex gap-2 align-items-end">
-                        <input type="date" name="start" class="form-control form-control-sm" value="{{ start|date:'Y-m-d' }}">
+                        <input type="date" name="start" class="form-control form-control-sm" value="{{ start|date:'Y-m-d' }}" style="max-width: 110px;">
                         <span class="text-muted">to</span>
-                        <input type="date" name="end" class="form-control form-control-sm" value="{{ end|date:'Y-m-d' }}">
+                        <input type="date" name="end" class="form-control form-control-sm" value="{{ end|date:'Y-m-d' }}" style="max-width: 110px;">
                         <button class="btn btn-sm btn-primary">Apply</button>
                     </form>
                 </div>
@@ -53,6 +54,7 @@
                     <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?start={{ today_iso }}&end={{ today_iso }}">Today</a>
                     <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?start={{ month_first }}&end={{ today_iso }}">MTD</a>
                     <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?month={{ current_month }}">This Month</a>
+                    <a class="btn btn-sm btn-outline-info" href="{% url 'daily_sales_report' %}?date={{ today_iso }}">Day</a>
                 </div>
             </div>
             <div class="text-muted small mt-2">Viewing: <strong>{{ period_label }}</strong></div>
@@ -88,16 +90,16 @@
         <!-- Per-shop breakdown -->
         <div class="row g-3">
             {% for shop in shops_data %}
-            <div class="col-12 col-lg-6">
+            <div class="col-12">
                 <div class="card p-0 shop-card overflow-hidden">
-                    <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
+                    <div class="p-3 border-bottom d-flex flex-wrap justify-content-between align-items-center gap-1">
                         <h6 class="mb-0 fw-bold">🏪 {{ shop.name }}</h6>
                         <span class="text-success fw-bold">+KSh {{ shop.net_profit|floatformat:2 }}
                             <small class="text-muted fw-normal">(gross {{ shop.profit|floatformat:2 }} · exp {{ shop.expenses|floatformat:2 }} · {{ shop.units|floatformat:2 }} units)</small>
                         </span>
                     </div>
                     {% if shop.product_rows %}
-                    <div class="table-responsive" style="max-height: 340px;">
+                    <div class="table-responsive" style="max-height: 300px; overflow:auto;">
                         <table class="table table-sm align-middle mb-0">
                             <thead class="table-light sticky-top">
                                 <tr>
@@ -133,16 +135,16 @@
                 <h6 class="fw-bold mb-3">Profit per product per shop per day</h6>
                 <p class="text-muted small mb-3">Filter below to narrow the view.</p>
                 <div class="row g-2 mb-3">
-                    <div class="col-6 col-sm-3">
+                    <div class="col-12 col-sm-5">
                         <label class="form-label tiny text-muted">Shop</label>
                         <select id="reportShopFilter" class="form-select form-select-sm">
                             <option value="">All shops</option>
                             {% for s in shops_data %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}
                         </select>
                     </div>
-                    <div class="col-6 col-sm-3">
+                    <div class="col-12 col-sm-7">
                         <label class="form-label tiny text-muted">Product</label>
-                        <select id="reportProductFilter" class="form-select form-select-sm">
+                        <select id="reportProductFilter" class="form-select form-select-sm" style="min-width: 160px;">
                             <option value="">All products</option>
                             {% for shop in shops_data %}
                                 {% for r in shop.product_rows %}

@@ -5,6 +5,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
+    --sd-brand: #18181b;
+    --sd-brand-ink: #09090b;
+    --sd-brand-soft: #18181b;
+    --sd-brand-line: #27272a;
+
+
     --sd-bg: #fafafa;
     --sd-card: #ffffff;
     --sd-border: #e4e4e7;
@@ -28,6 +34,8 @@
 body {
     background-color: var(--sd-bg) !important;
     color: var(--sd-fg);
+    -webkit-font-smoothing: antialiased;
+}
     font-family: var(--sd-font);
     font-size: 14px;
     -webkit-font-smoothing: antialiased;
@@ -35,7 +43,7 @@ body {
 
 h1, h2, h3, h4, h5, h6,
 .h1, .h2, .h3, .h4, .h5, .h6 {
-    color: #09090b;
+    color: var(--sd-brand-ink) !important;
     letter-spacing: -0.02em;
     font-weight: 700;
 }
@@ -43,12 +51,43 @@ p { color: #52525b; }
 a { text-underline-offset: 3px; }
 hr { border-color: var(--sd-border); opacity: 1; }
 
+/* shadcn-style color system ------------------------------------------------ */
+.bg-brand     { background: var(--sd-brand) !important; color: #fafafa !important; }
+.bg-brand h1, .bg-brand h2, .bg-brand h3, .bg-brand h4, .bg-brand h5, .bg-brand h6,
+.bg-brand .display-6, .bg-brand .fw-bold { color: #fafafa !important; }
+.bg-brand-soft { background: var(--sd-brand-soft) !important; color: #fafafa !important; }
+.bg-brand-soft h1, .bg-brand-soft h2, .bg-brand-soft h3, .bg-brand-soft h4, .bg-brand-soft h5, .bg-brand-soft h6,
+.bg-brand-soft .display-6, .bg-brand-soft .fw-bold { color: #fafafa !important; }
+.bg-brand-line { background: var(--sd-brand-line) !important; color: #fafafa !important; }
+
+.text-brand      { color: var(--sd-brand) !important; }
+.text-brand-soft { color: var(--sd-brand-soft) !important; }
+.text-brand-line { color: var(--sd-brand-line) !important; }
+.text-brand-ink  { color: var(--sd-brand-ink) !important; }
+
+
 /* cards ------------------------------------------------------------ */
 .card {
     background: var(--sd-card) !important;
     border: 1px solid var(--sd-border) !important;
     border-radius: var(--sd-radius) !important;
     box-shadow: var(--sd-shadow) !important;
+}
+
+/* card surface ------------------------------------------------------- */
+.card,
+.card-header,
+.card-body,
+.card-footer,
+.card-title,
+.card-subtitle {
+    border-color: var(--sd-border) !important;
+}
+
+/* table surface ------------------------------------------------------- */
+.table thead th {
+    background: var(--sd-brand-soft) !important;
+    color: var(--sd-fg) !important;
 }
 .card-header {
     background: #fafafa !important;
@@ -152,8 +191,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
 }
 .table > :not(caption) > * > * { background-color: transparent; border-bottom-color: var(--sd-muted-border); }
 .table thead th {
-    background: #fafafa !important;
-    color: var(--sd-muted) !important;
+    background: var(--sd-brand-soft) !important;
+    color: var(--sd-fg) !important;
     font-size: .68rem;
     font-weight: 600;
     letter-spacing: .07em;
@@ -205,7 +244,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
 .text-primary { color: #18181b !important; }
 
 /* dropdowns, popups, modals ------------------------------------------ */
-.dropdown-menu {
+.dropdown-menu, .modal-content, .offcanvas {
     border: 1px solid var(--sd-border);
     border-radius: 12px;
     box-shadow: var(--sd-shadow);
@@ -216,7 +255,56 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
 .modal-content { border: 1px solid var(--sd-border); border-radius: 16px; box-shadow: var(--sd-shadow); }
 .offcanvas { background: var(--sd-bg); }
 
+/* ---------- mobile content ------------------------------------------------ */
+/* Force the whole app content to the full mobile viewport so nothing is squeezed
+   into a fake small desktop column on phones. */
+@media (max-width: 640px) {
+    html, body { min-width: 0 !important; }
+    .container, .container-md, .container-sm, .container-lg, .container-xl, .container-xxl,
+    .container-fluid { max-width: 100% !important; padding-left: 12px !important;
+                       padding-right: 12px !important; }
+    .container, .container-md, .container-sm, .container-lg, .container-xl, .container-xxl {
+        padding-left: 12px !important; padding-right: 12px !important; }
+    .col, .col-1, .col-2, .col-3, .col-4, .col-5, .col-6, .col-7, .col-8, .col-9, .col-10,
+    .col-11, .col-12, .col-auto, .col-sm, .col-sm-auto, .col-sm-1, .col-sm-2, .col-sm-3,
+    .col-sm-4, .col-sm-5, .col-sm-6, .col-sm-7, .col-sm-8, .col-sm-9, .col-sm-10,
+    .col-sm-11, .col-sm-12, .col-sm-auto, .col-md, .col-md-auto, .col-md-1, .col-md-2,
+    .col-md-3, .col-md-4, .col-md-5, .col-md-6, .col-md-7, .col-md-8, .col-md-9, .col-md-10,
+    .col-md-11, .col-md-12, .col-md-auto, .col-lg, .col-lg-auto, .col-lg-1, .col-lg-2,
+    .col-lg-3, .col-lg-4, .col-lg-5, .col-lg-6, .col-lg-7, .col-lg-8, .col-lg-9, .col-lg-10,
+    .col-lg-11, .col-lg-12, .col-lg-auto, .col-xl, .col-xl-auto, .col-xl-1, .col-xl-2,
+    .col-xl-3, .col-xl-4, .col-xl-5, .col-xl-6, .col-xl-7, .col-xl-8, .col-xl-9, .col-xl-10,
+    .col-xl-11, .col-xl-12, .col-xl-auto, .col-xxl, .col-xxl-auto, .col-xxl-1, .col-xxl-2,
+    .col-xxl-3, .col-xxl-4, .col-xxl-5, .col-xxl-6, .col-xxl-7, .col-xxl-8, .col-xxl-9,
+    .col-xxl-10, .col-xxl-11, .col-xxl-12, .col-xxl-auto { max-width: 100% !important; padding-left: 4px !important;
+    padding-right: 4px !important; }
+}
+
+/* Avoid overflowing content inside cards/table cells /wrapped rows. */
+.text-truncate, .h-100, .h-75, .h-50, .h-25, .h-100vh, .vh-100 { max-width: 100% !important; }
+
+
 /* misc ---------------------------------------------------------------- */
 .sticky-top { z-index: 1020; }
-::placeholder { color: var(--sd-faint); opacity: 1; }
+
+/* ---------- content fit ------------------------------------------------------- */
+/* Make long product / shop / category strings wrap instead of shrinking or
+   overflowing, and keep cards and tables readable on narrow screens. */
+.text-truncate { max-width: 100%; white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; }
+.shorten { max-width: 100% !important; }
+
+/* Tables: keep headers and cells readable, allow the table to scroll on very
+   narrow screens instead of squashing every column. */
+.table-responsive { width: 100% !important; margin-bottom: 0 !important; overflow-x: auto;
+                     -webkit-overflow-scrolling: touch; }
+.table th, .table td { white-space: normal !important; padding: .5rem .6rem !important;
+                       word-break: break-word; overflow-wrap: anywhere; }
+.table thead th { white-space: nowrap; }
+
+/* Buttons inside tight spaces (chips, pill tables, form inputs): shrink to
+   their content instead of stretching to the column width. */
+.btn, .btn-sm, .btn-group { white-space: nowrap; }
+.btn-sm { white-space: normal; }
+
 </style>
