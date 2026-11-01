@@ -19,6 +19,7 @@
 @media (max-width: 640px) {
     .price-input, .qty-input { width: 100% !important; margin-bottom: .5rem !important; }
     .price-input + .price-input, .qty-input + .qty-input { margin-top: .5rem !important; }
+    .product-name { min-width: 80px !important; }
 }
 
         /* --- shadcn swipe actions (swipe a row left → Edit / Delete) --- */
@@ -253,7 +254,7 @@
                                         data-sell="{{ product.selling_price|floatformat:2 }}"
                                         data-cost="{{ product.cost_price|floatformat:2 }}">
                                         <td class="ps-3 text-muted">{{ forloop.counter }}</td>
-                                        <td style="min-width: 150px;">{{ product.product_name }}</td>
+                                        <td class="product-name" style="min-width: 120px;">{{ product.product_name }}</td>
                                         <td class="text-end">
                                             <input type="number" name="sell_{{ product.pk }}" min="0" step="0.01"
                                                    class="form-control form-control-sm text-end price-input" value="{{ sell|floatformat:2 }}">
