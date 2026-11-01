@@ -95,7 +95,12 @@ def dashboard(request):
     # 4. Shop profits by date range
     range_start = _strict_date(request.GET.get('range_start'))
     range_end = _strict_date(request.GET.get('range_end'))
-    if not range_start or not range_end or range_end < range_start:
+    if not range_start and not range_end:
+        # Show the last 30 days by default so the table is not empty when
+        # nothing was entered for today.
+        range_start = today - timedelta(days=29)
+        range_end = today
+    elif not range_start or not range_end or range_end < range_start:
         range_start = today
         range_end = today
 
@@ -151,6 +156,15 @@ def dashboard(request):
         row['cells'] = [row.get(key, 0.0) for key in shop_keys]
     shop_totals_list = [totals.get(key, 0.0) for key in shop_keys]
 
+    analytics = _build_analytics()
+    # Open on the widest range that actually has data, so the charts are never
+    # blank on a day with no sales yet.
+    analytics_default = 'month'
+    if analytics['day']['rows']:
+        analytics_default = 'day'
+    elif analytics['week']['rows']:
+        analytics_default = 'week'
+
     return render(request, 'tracker/dashboard.html', {
         'products': products,
         'total_profit': total_profit,
@@ -166,7 +180,8 @@ def dashboard(request):
         'shop_totals_list': shop_totals_list,
         'shop_grand_total': grand_total,
         'shops': SHOPS,
-        'analytics_json': json.dumps(_build_analytics()),
+        'analytics_json': json.dumps(analytics),
+        'analytics_default': analytics_default,
     })
 
 def views_product_detail(request, pk):
@@ -877,7 +892,7 @@ def daily_sales_report(request):
     product_profit_by_day = []
     for r in (
         sales.values('shop', 'product__product_name', 'date')
-        .annotate(profit=Sum('profit'))
+        .annotate(profit=Sum('profit'), qty=Sum('quantity_sold'))
         .order_by('shop', 'product__product_name', 'date')
     ):
         product_profit_by_day.append([
@@ -885,6 +900,7 @@ def daily_sales_report(request):
             r['product__product_name'],
             r['date'].isoformat(),
             float(r['profit'] or 0),
+            float(r['qty'] or 0),
         ])
     # Daily labels for the time-series chart
     sale_by_date = {

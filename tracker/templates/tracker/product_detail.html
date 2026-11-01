@@ -9,8 +9,14 @@
         body { background-color: #f0f2f5; }
         .card { border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-radius: 15px; margin-bottom: 1.5rem; }
         .bg-custom-blue { background: #004a99; color: white; }
-        .audit-card { border-top: 5px solid #198754; }
-        .restock-card { border-top: 5px solid #0d6efd; }
+        .audit-card { border-top: 5px solid var(--sd-green); }
+        .restock-card { border-top: 5px solid var(--sd-blue); }
+        .price-line { display: flex; justify-content: space-between; align-items: center;
+                      padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; }
+        .price-line.buy { background: var(--sd-orange-soft); color: var(--sd-orange-deep); }
+        .price-line.sell { background: var(--sd-green-soft); color: var(--sd-green-deep); }
+        .price-line .label { font-weight: 600; font-size: .82rem; }
+        .price-line .value { font-weight: 800; font-size: 1rem; }
     </style>
     {% include "tracker/site_styles.html" %}
 </head>
@@ -30,13 +36,13 @@
                     <h2 class="h4 fw-bold mb-1">{{ product.product_name }}</h2>
                     <p class="text-muted small mb-3">Category: {{ product.category }} | Shop: {{ product.shop|default:"N/A" }}</p>
                     <hr>
-                    <div class="d-flex justify-content-between mb-2">
-                        <span>Buying Price:</span>
-                        <span class="fw-bold text-danger">KSh {{ product.cost_price }}</span>
+                    <div class="price-line buy">
+                        <span class="label">Buying Price</span>
+                        <span class="value">KSh {{ product.cost_price }}</span>
                     </div>
-                    <div class="d-flex justify-content-between">
-                        <span>Selling Price:</span>
-                        <span class="fw-bold text-success">KSh {{ product.selling_price }}</span>
+                    <div class="price-line sell">
+                        <span class="label">Selling Price</span>
+                        <span class="value">KSh {{ product.selling_price }}</span>
                     </div>
                 </div>
 

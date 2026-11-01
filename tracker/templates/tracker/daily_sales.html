@@ -16,10 +16,50 @@
         .price-input { width: 85px; }
         .qty-input { width: 100px; }
 
+        /* Global sheet search */
+        .card.sheet-search-card { padding: 14px 16px; border-left: 4px solid var(--sd-blue) !important; }
+        .sheet-search {
+            display: flex; align-items: center; gap: 10px;
+            background: #fff; border: 1.5px solid var(--sd-border);
+            border-radius: 12px; padding: 5px 10px 5px 12px;
+            transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        .sheet-search:focus-within {
+            border-color: var(--sd-blue);
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, .14);
+        }
+        .sheet-search-icon { color: var(--sd-blue); font-size: 1rem; display: inline-flex; flex: 0 0 auto; }
+        .sheet-search-input {
+            flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+            font-size: .92rem; color: var(--sd-fg); padding: 8px 0;
+        }
+        .sheet-search-input::placeholder { color: var(--sd-faint); }
+        .sheet-search-count {
+            flex: 0 0 auto; font-size: .72rem; font-weight: 700; letter-spacing: .03em;
+            color: var(--sd-blue-deep); background: var(--sd-blue-soft);
+            border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+        }
+        .sheet-search-count:empty { display: none; }
+        .sheet-search-clear {
+            flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+            border: 1px solid var(--sd-border); background: #fff; color: var(--sd-muted);
+            font-size: .75rem; line-height: 1; display: inline-flex;
+            align-items: center; justify-content: center; padding: 0; cursor: pointer;
+        }
+        .sheet-search-clear:hover {
+            background: var(--sd-orange-soft); border-color: #fed7aa; color: var(--sd-orange-deep);
+        }
+        .sheet-search-clear[hidden] { display: none; }
+        .sheet-search-hint { margin-top: 8px; font-size: .76rem; color: var(--sd-muted); }
+
 @media (max-width: 640px) {
+    .sheet-search { flex-wrap: wrap; }
+    .sheet-search-input { flex-basis: 100%; order: 3; padding: 6px 0 2px; }
+    .sheet-search-count { margin-left: auto; }
     .price-input, .qty-input { width: 100% !important; margin-bottom: .5rem !important; }
     .price-input + .price-input, .qty-input + .qty-input { margin-top: .5rem !important; }
     .product-name { min-width: 80px !important; }
+    .category-section .table-responsive { max-height: none !important; overflow: visible !important; }
 }
 
         /* --- shadcn swipe actions (swipe a row left → Edit / Delete) --- */
@@ -177,14 +217,16 @@
         </div>
 
             <!-- Global search: one box across the WHOLE sheet, all categories -->
-            <div class="card p-2 mb-3">
-                <div class="input-group">
-                    <span class="input-group-text border-0 bg-transparent"><i class="bi bi-search"></i></span>
-                    <input type="search" id="globalSearch" class="form-control border-0 shadow-none"
-                           placeholder="Search the whole sheet — every category, every product…" style="max-width: 280px;">
-                    <span class="input-group-text border-0 bg-transparent small text-muted" id="globalSearchCount"></span>
+            <div class="card sheet-search-card mb-3">
+                <div class="sheet-search">
+                    <span class="sheet-search-icon"><i class="bi bi-search"></i></span>
+                    <input type="search" id="globalSearch" class="sheet-search-input" autocomplete="off"
+                           placeholder="Search the whole sheet — every category, every product…">
+                    <span class="sheet-search-count" id="globalSearchCount"></span>
+                    <button type="button" class="sheet-search-clear" id="globalSearchClear"
+                            aria-label="Clear search" hidden>✕</button>
                 </div>
-                <div class="small text-muted px-3 pb-1" style="font-size: .76rem;">
+                <div class="sheet-search-hint">
                     💡 Swipe a product row to the left (or drag it) to reveal <strong>✏️ Edit</strong> and <strong>🗑 Delete</strong>.
                 </div>
             </div>
@@ -235,13 +277,13 @@
                     </div>
                     <div class="collapse show" id="collapse-{{ forloop.counter }}">
                         <div class="table-responsive">
-                            <table class="table table-hover align-middle mb-0">
+                            <table class="table table-hover align-middle mb-0 table-cards">
                                 <thead class="table-light sticky-head">
                                     <tr>
                                         <th class="ps-3" style="width:40px;">#</th>
                                         <th>Product</th>
                                         <th class="text-end" style="width:100px;">Sell Price</th>
-                                        <th class="text-end" style="width:100px;">Cost Price</th>
+                                        <th class="text-end" style="width:100px;">Buy Price</th>
                                         <th class="text-end" style="width:140px;">Amount Sold</th>
                                         <th class="pe-3 text-end" style="width:96px;"></th>
                                     </tr>
@@ -253,21 +295,21 @@
                                         data-category="{{ product.category|default:'' }}"
                                         data-sell="{{ product.selling_price|floatformat:2 }}"
                                         data-cost="{{ product.cost_price|floatformat:2 }}">
-                                        <td class="ps-3 text-muted">{{ forloop.counter }}</td>
-                                        <td class="product-name" style="min-width: 120px;">{{ product.product_name }}</td>
-                                        <td class="text-end">
+                                        <td class="ps-3 text-muted row-index" data-label="No.">{{ forloop.counter }}</td>
+                                        <td class="product-name" data-label="Product" style="min-width: 120px;">{{ product.product_name }}</td>
+                                        <td class="text-end cell-sell" data-label="Sell price">
                                             <input type="number" name="sell_{{ product.pk }}" min="0" step="0.01"
-                                                   class="form-control form-control-sm text-end price-input" value="{{ sell|floatformat:2 }}">
+                                                   class="form-control form-control-sm text-end price-input sell-input" value="{{ sell|floatformat:2 }}">
                                         </td>
-                                        <td class="text-end">
+                                        <td class="text-end cell-cost" data-label="Buy price">
                                             <input type="number" name="cost_{{ product.pk }}" min="0" step="0.01"
-                                                   class="form-control form-control-sm text-end price-input" value="{{ cost|floatformat:2 }}">
+                                                   class="form-control form-control-sm text-end price-input cost-input" value="{{ cost|floatformat:2 }}">
                                         </td>
-                                        <td>
+                                        <td class="cell-qty" data-label="Amount sold">
                                             <input type="number" name="qty_{{ product.pk }}" min="0" step="0.01"
                                                    class="form-control form-control-sm text-end qty-input" value="{{ qty }}" placeholder="0">
                                         </td>
-                                        <td class="pe-3 actions-cell">
+                                        <td class="pe-3 actions-cell" data-label="Actions">
                                             <!-- No nested forms inside the bulk <form>: JS posts these. -->
                                             <div class="swipe-actions">
                                                 <button type="button" class="sd-icon-btn edit-item"
@@ -582,7 +624,7 @@
                     var hay = (tr.dataset.name ||
                                (tr.children[1] ? tr.children[1].textContent : '')).toLowerCase();
                     var match = !q || hay.indexOf(q) !== -1;
-                    tr.style.display = match ? 'none' : '';
+                    tr.style.display = match ? '' : 'none';
                     if (match) visible++;
                 });
                 matches += visible;
@@ -590,6 +632,8 @@
             });
             var count = document.getElementById('globalSearchCount');
             if (count) count.textContent = g ? matches + ' match' + (matches === 1 ? '' : 'es') : '';
+            var clear = document.getElementById('globalSearchClear');
+            if (clear) clear.hidden = !g;
             var empty = document.getElementById('noMatches');
             if (empty) {
                 empty.classList.toggle('d-none', !(g && matches === 0));
@@ -599,7 +643,20 @@
         }
 
         var globalSearch = document.getElementById('globalSearch');
-        if (globalSearch) globalSearch.addEventListener('input', applySheetFilter);
+        var globalSearchClear = document.getElementById('globalSearchClear');
+        function clearGlobalSearch() {
+            if (!globalSearch) return;
+            globalSearch.value = '';
+            applySheetFilter();
+            globalSearch.focus();
+        }
+        if (globalSearch) {
+            globalSearch.addEventListener('input', applySheetFilter);
+            globalSearch.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') clearGlobalSearch();
+            });
+        }
+        if (globalSearchClear) globalSearchClear.addEventListener('click', clearGlobalSearch);
         document.querySelectorAll('.category-search').forEach(function (input) {
             input.addEventListener('input', applySheetFilter);
         });

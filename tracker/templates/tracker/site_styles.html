@@ -2,28 +2,36 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-    --sd-brand: #18181b;
-    --sd-brand-ink: #09090b;
-    --sd-brand-soft: #18181b;
-    --sd-brand-line: #27272a;
+    /* brand palette: blue + dark green + orange */
+    --sd-brand: #1d4ed8;
+    --sd-brand-ink: #0f172a;
+    --sd-brand-soft: #1e40af;
+    --sd-brand-line: #1e3a8a;
 
-
-    --sd-bg: #fafafa;
-    --sd-card: #ffffff;
-    --sd-border: #e4e4e7;
-    --sd-muted-border: #f1f1f4;
-    --sd-fg: #18181b;
-    --sd-muted: #71717a;
-    --sd-faint: #a1a1aa;
-    --sd-primary: #18181b;
-    --sd-primary-hover: #27272a;
-    --sd-green: #16a34a;
-    --sd-red: #dc2626;
     --sd-blue: #2563eb;
+    --sd-blue-deep: #1e40af;
+    --sd-blue-soft: #eff6ff;
+    --sd-green: #15803d;
+    --sd-green-deep: #14532d;
+    --sd-green-soft: #f0fdf4;
+    --sd-orange: #ea580c;
+    --sd-orange-deep: #c2410c;
+    --sd-orange-soft: #fff7ed;
+
+    --sd-bg: #f1f5f9;
+    --sd-card: #ffffff;
+    --sd-border: #dbe3ee;
+    --sd-muted-border: #e8eef6;
+    --sd-fg: #0f172a;
+    --sd-muted: #64748b;
+    --sd-faint: #94a3b8;
+    --sd-primary: #1d4ed8;
+    --sd-primary-hover: #1e40af;
+    --sd-red: #dc2626;
     --sd-radius: 16px;
     --sd-radius-sm: 10px;
-    --sd-ring: 0 0 0 3px rgba(24, 24, 27, .12);
-    --sd-shadow: 0 1px 2px rgba(9, 9, 11, .04), 0 8px 24px -12px rgba(9, 9, 11, .18);
+    --sd-ring: 0 0 0 3px rgba(37, 99, 235, .16);
+    --sd-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px -12px rgba(15, 23, 42, .18);
     --sd-font: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI",
                 Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -31,8 +39,6 @@
 body {
     background-color: var(--sd-bg) !important;
     color: var(--sd-fg);
-    -webkit-font-smoothing: antialiased;
-}
     font-family: var(--sd-font);
     font-size: 14px;
     -webkit-font-smoothing: antialiased;
@@ -83,8 +89,8 @@ hr { border-color: var(--sd-border); opacity: 1; }
 
 /* table surface ------------------------------------------------------- */
 .table thead th {
-    background: var(--sd-brand-soft) !important;
-    color: var(--sd-fg) !important;
+    background: var(--sd-blue-soft) !important;
+    color: var(--sd-blue-deep) !important;
 }
 .card-header {
     background: #fafafa !important;
@@ -93,23 +99,30 @@ hr { border-color: var(--sd-border); opacity: 1; }
     font-weight: 600;
     color: var(--sd-fg);
 }
+.category-header {
+    background: var(--sd-blue-soft) !important;
+    border-bottom: 1px solid #dbeafe !important;
+    color: var(--sd-blue-deep) !important;
+}
+.category-header:hover { background: #dbeafe !important; }
+.category-header h6, .category-header .fw-bold { color: var(--sd-blue-deep) !important; }
 .list-group-item { border-color: var(--sd-muted-border) !important; background: transparent; }
 .list-group-item:hover { background: #fafafa; }
 
 /* navbars ----------------------------------------------------------- */
 .navbar.bg-dark, .navbar-dark.bg-dark {
     background: #ffffff !important;
-    border-bottom: 1px solid var(--sd-border);
-    box-shadow: 0 1px 2px rgba(9, 9, 11, .04);
+    border-bottom: 3px solid var(--sd-blue);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
 }
 .navbar-dark .navbar-brand,
 .navbar-dark .navbar-text,
 .navbar-dark .nav-link {
-    color: var(--sd-fg) !important;
-    font-weight: 600;
+    color: var(--sd-blue-deep) !important;
+    font-weight: 700;
 }
-.navbar-dark .navbar-brand:hover { color: var(--sd-muted) !important; }
-.navbar-dark .navbar-brand.text-info { color: #0891b2 !important; }
+.navbar-dark .navbar-brand:hover { color: var(--sd-blue) !important; }
+.navbar-dark .navbar-brand.text-info { color: var(--sd-orange) !important; }
 
 /* buttons ----------------------------------------------------------- */
 .btn {
@@ -135,12 +148,14 @@ hr { border-color: var(--sd-border); opacity: 1; }
     background: #f4f4f5; border-color: var(--sd-border); color: var(--sd-fg);
 }
 .btn-success { background: var(--sd-green); border-color: var(--sd-green); color: #fff; }
-.btn-success:hover, .btn-success:focus { background: #15803d; border-color: #15803d; color: #fff; }
+.btn-success:hover, .btn-success:focus { background: var(--sd-green-deep); border-color: var(--sd-green-deep); color: #fff; }
 .btn-outline-success { color: var(--sd-green); border-color: #bbf7d0; }
-.btn-outline-success:hover { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+.btn-outline-success:hover { background: var(--sd-green-soft); border-color: #bbf7d0; color: var(--sd-green-deep); }
 .btn-danger { background: var(--sd-red); border-color: var(--sd-red); }
-.btn-info { background: #0891b2; border-color: #0891b2; color: #fff; }
-.btn-info:hover { background: #0e7490; border-color: #0e7490; color: #fff; }
+.btn-info { background: var(--sd-orange); border-color: var(--sd-orange); color: #fff; }
+.btn-info:hover, .btn-info:focus { background: var(--sd-orange-deep); border-color: var(--sd-orange-deep); color: #fff; }
+.btn-outline-info { color: var(--sd-orange-deep); border-color: #fed7aa; }
+.btn-outline-info:hover { background: var(--sd-orange-soft); border-color: #fdba74; color: var(--sd-orange-deep); }
 .btn-outline-secondary { border-color: var(--sd-border); color: var(--sd-muted); }.btn-outline-secondary:hover { background: #f4f4f5; border-color: var(--sd-border); color: var(--sd-fg); }
 
 .btn-dark { background: var(--sd-brand); border-color: var(--sd-brand); color: #fafafa; }
@@ -209,16 +224,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
 }
 .table > :not(caption) > * > * { background-color: transparent; border-bottom-color: var(--sd-muted-border); }
 .table thead th {
-    background: var(--sd-brand-soft) !important;
-    color: var(--sd-fg) !important;
+    background: var(--sd-blue-soft) !important;
+    color: var(--sd-blue-deep) !important;
     font-size: .68rem;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: .07em;
     text-transform: uppercase;
-    border-bottom: 1px solid var(--sd-border) !important;
+    border-bottom: 1px solid #dbeafe !important;
     vertical-align: middle;
 }
-.table-hover > tbody > tr:hover > * { background-color: #fafafa !important; }
+.table-hover > tbody > tr:hover > * { background-color: #f8fbff !important; }
 .table td, .table th { vertical-align: middle; }
 .table-bordered { border-color: var(--sd-border); }
 .table-bordered > :not(caption) > * > * { border-color: var(--sd-muted-border); }
@@ -240,26 +255,54 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
     font-size: .875rem;
     box-shadow: var(--sd-shadow);
 }
-.alert-success { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+.alert-success { background: var(--sd-green-soft); border-color: #bbf7d0; color: var(--sd-green-deep); }
 .alert-danger, .alert-warning { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
-.alert-info { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+.alert-info { background: var(--sd-blue-soft); border-color: #bfdbfe; color: var(--sd-blue-deep); }
 
 /* accents used across the app --------------------------------------- */
 .stat-card {
-    background: var(--sd-primary) !important;
+    background: linear-gradient(135deg, var(--sd-blue-deep) 0%, var(--sd-green-deep) 100%) !important;
     color: #fafafa !important;
-    border: 1px solid var(--sd-primary) !important;
+    border: 1px solid var(--sd-blue-deep) !important;
     border-radius: var(--sd-radius) !important;
 }
 .stat-card h1, .stat-card h2, .stat-card h3, .stat-card h5, .stat-card h6,
 .stat-card .display-6, .stat-card .fw-bold { color: #fafafa !important; }
-.bg-custom-blue { background: var(--sd-primary) !important; color: #fafafa; }
+.bg-custom-blue {
+    background: linear-gradient(135deg, var(--sd-blue-deep) 0%, var(--sd-green-deep) 100%) !important;
+    color: #fafafa;
+}
 .bg-custom-blue h1, .bg-custom-blue h2, .bg-custom-blue h3,
 .bg-custom-blue h4, .bg-custom-blue h5 { color: #fafafa !important; }
 
 .text-success { color: var(--sd-green) !important; }
 .text-danger { color: var(--sd-red) !important; }
-.text-primary { color: #18181b !important; }
+.text-primary { color: var(--sd-blue-deep) !important; }
+.text-orange { color: var(--sd-orange-deep) !important; }
+.text-blue { color: var(--sd-blue-deep) !important; }
+
+/* price colour coding ------------------------------------------------- */
+.sell-price, .cell-sell .price-input, .sell-input {
+    color: var(--sd-green-deep) !important;
+    border-color: #bbf7d0 !important;
+    background: var(--sd-green-soft) !important;
+    font-weight: 700;
+}
+.cost-price, .cell-cost .price-input, .cost-input {
+    color: var(--sd-orange-deep) !important;
+    border-color: #fed7aa !important;
+    background: var(--sd-orange-soft) !important;
+    font-weight: 700;
+}
+.qty-input {
+    color: var(--sd-blue-deep) !important;
+    border-color: #bfdbfe !important;
+    background: var(--sd-blue-soft) !important;
+    font-weight: 700;
+}
+.cell-sell .price-input:focus { box-shadow: 0 0 0 3px rgba(21, 128, 61, .18) !important; }
+.cell-cost .price-input:focus { box-shadow: 0 0 0 3px rgba(234, 88, 12, .18) !important; }
+.qty-input:focus { box-shadow: 0 0 0 3px rgba(37, 99, 235, .18) !important; }
 
 /* dropdowns, popups, modals ------------------------------------------ */
 .dropdown-menu, .modal-content, .offcanvas {
@@ -324,5 +367,85 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--sd-primary); }
    their content instead of stretching to the column width. */
 .btn, .btn-sm, .btn-group { white-space: nowrap; }
 .btn-sm { white-space: normal; }
+
+/* ---------- mobile card tables ------------------------------------------- */
+/* On phones a wide price table is impossible to read. These tables turn each
+   row into a stacked card so Product / Selling / Buying / Qty are all visible
+   without horizontal scrolling. */
+@media (max-width: 640px) {
+    .table-cards thead { display: none !important; }
+    .table-cards,
+    .table-cards tbody,
+    .table-cards tr,
+    .table-cards td { display: block !important; width: 100% !important; }
+
+    .table-cards tbody tr {
+        border: 1px solid var(--sd-border) !important;
+        border-radius: 14px !important;
+        background: #fff !important;
+        box-shadow: var(--sd-shadow) !important;
+        padding: 10px 14px !important;
+        margin-bottom: 12px;
+    }
+    .table-cards tbody tr > td {
+        border: 0 !important;
+        border-bottom: 1px dashed var(--sd-muted-border) !important;
+        padding: 8px 0 !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        text-align: left !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+    }
+    .table-cards tbody tr > td:last-child { border-bottom: 0 !important; }
+    .table-cards tbody tr > td::before {
+        content: attr(data-label);
+        flex: 0 0 auto;
+        font-size: .66rem;
+        font-weight: 700;
+        letter-spacing: .07em;
+        text-transform: uppercase;
+        color: var(--sd-muted);
+    }
+    .table-cards tbody tr > td:not([data-label])::before,
+    .table-cards tbody tr > td[data-label=""]::before { display: none; }
+
+    /* Product name becomes the card heading. */
+    .table-cards tbody tr > td.product-name {
+        display: block !important;
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--sd-blue-deep);
+        padding-top: 2px !important;
+    }
+    .table-cards tbody tr > td.product-name::before { display: none; }
+
+    /* Inputs fill their row so prices are never clipped. */
+    .table-cards tbody tr > td .price-input,
+    .table-cards tbody tr > td .qty-input {
+        width: 55% !important;
+        max-width: 170px;
+        margin: 0 !important;
+    }
+
+    /* Keep the row actions reachable without swiping. */
+    .table-cards tbody tr > td.actions-cell { justify-content: flex-end; }
+    .table-cards .swipe-actions {
+        opacity: 1 !important;
+        transform: none !important;
+        pointer-events: auto !important;
+    }
+
+    /* Inline edit row stays a full-width card. */
+    .table-cards tr.edit-row { padding: 12px !important; }
+    .table-cards tr.edit-row > td { display: block !important; border: 0 !important; }
+
+    /* Custom item rows stack vertically. */
+    .manual-row { border: 1px solid var(--sd-border); border-radius: 12px;
+                  padding: 10px; background: #fff; }
+    .manual-row > [class*="col"] { flex: 0 0 100% !important; max-width: 100% !important; }
+}
 
 </style>

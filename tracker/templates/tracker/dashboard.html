@@ -16,7 +16,11 @@
         .analytics-card { border: 1px solid #e4e4e7; box-shadow: 0 1px 2px rgba(9,9,11,.04), 0 8px 24px -12px rgba(9,9,11,.18); }
         .range-toggle .btn { border-radius: 999px; font-weight: 600; font-size: .8rem; }
         .range-toggle .btn.active { background: #18181b; border-color: #18181b; color: #fff; }
-        .kpi-mini { border: 1px solid #e4e4e7; border-radius: 14px; background: #fff; padding: 14px 16px; }
+        .kpi-mini { border: 1px solid #e4e4e7; border-left: 4px solid var(--sd-blue); border-radius: 14px; background: #fff; padding: 14px 16px; }
+        #analytics .row .col-6:nth-child(1) .kpi-mini { border-left-color: var(--sd-blue); }
+        #analytics .row .col-6:nth-child(2) .kpi-mini { border-left-color: var(--sd-green); }
+        #analytics .row .col-6:nth-child(3) .kpi-mini { border-left-color: var(--sd-orange); }
+        #analytics .row .col-6:nth-child(4) .kpi-mini { border-left-color: var(--sd-blue-deep); }
         .kpi-mini .kpi-label { font-size: .68rem; letter-spacing: .07em; text-transform: uppercase; color: #a1a1aa; font-weight: 600; }
         .kpi-mini .kpi-value { font-size: 1.4rem; font-weight: 700; letter-spacing: -.03em; color: #09090b; font-variant-numeric: tabular-nums; }
         .kpi-mini .kpi-sub { font-size: .75rem; color: #71717a; }
@@ -93,8 +97,9 @@
                     <small class="text-muted" id="analytics-range">Which product moves most, and when</small>
                     <div><span class="insight-chip" id="analytics-peak">&mdash;</span></div>
                 </div>
-                <div class="btn-group range-toggle" role="group" id="range-toggle">
-                    <button type="button" class="btn btn-outline-dark btn-sm active" data-range="day">Daily</button>
+                <div class="btn-group range-toggle" role="group" id="range-toggle"
+                     data-default="{{ analytics_default }}">
+                    <button type="button" class="btn btn-outline-dark btn-sm" data-range="day">Daily</button>
                     <button type="button" class="btn btn-outline-dark btn-sm" data-range="week">Weekly</button>
                     <button type="button" class="btn btn-outline-dark btn-sm" data-range="month">Monthly</button>
                 </div>
@@ -223,24 +228,26 @@
                         <h5 class="mb-0 fw-bold">Master Product List</h5>
                     </div>
                     <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0">
+                        <table class="table table-hover align-middle mb-0 table-cards">
                             <thead class="table-light">
                                 <tr>
                                     <th>Product</th>
                                     <th class="d-none d-sm-table-cell">Category</th>
                                     <th class="d-none d-md-table-cell">Shop</th>
                                     <th class="text-end">Selling</th>
+                                    <th class="text-end">Buying</th>
                                     <th class="text-center">Action</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for p in products %}
                                 <tr>
-                                    <td><div class="fw-semibold text-truncate" style="max-width: 120px;">{{ p.product_name }}</div></td>
-                                    <td class="d-none d-sm-table-cell"><span class="badge bg-secondary opacity-75">{{ p.category }}</span></td>
-                                    <td class="d-none d-md-table-cell"><small class="text-muted">{{ p.shop|default:"-" }}</small></td>
-                                    <td class="text-end fw-bold text-success">KSh {{ p.selling_price|floatformat:0 }}</td>
-                                    <td class="text-center">
+                                    <td class="product-name" data-label="Product"><div class="fw-semibold text-truncate" style="max-width: 120px;">{{ p.product_name }}</div></td>
+                                    <td class="d-none d-sm-table-cell" data-label="Category"><span class="badge bg-secondary opacity-75">{{ p.category }}</span></td>
+                                    <td class="d-none d-md-table-cell" data-label="Shop"><small class="text-muted">{{ p.shop|default:"-" }}</small></td>
+                                    <td class="text-end" data-label="Selling"><span class="sell-price">KSh {{ p.selling_price|floatformat:0 }}</span></td>
+                                    <td class="text-end" data-label="Buying"><span class="cost-price">KSh {{ p.cost_price|floatformat:0 }}</span></td>
+                                    <td class="text-center" data-label="Action">
                                         <a href="/product/{{ p.id }}/" class="btn btn-sm btn-outline-primary">Open</a>
                                     </td>
                                 </tr>
@@ -351,7 +358,7 @@
                     data: {
                         labels: d.bar.labels,
                         datasets: [{ label: 'Units', data: d.bar.values,
-                                     backgroundColor: '#18181b', borderRadius: 6, maxBarThickness: 34 }]
+                                     backgroundColor: '#1d4ed8', borderRadius: 6, maxBarThickness: 34 }]
                     },
                     options: {
                         responsive: true, maintainAspectRatio: false, indexAxis: 'y',
@@ -410,7 +417,7 @@
                         '<strong>' + p.name + '</strong></span>' +
                         '<span style="display:flex; gap:16px;">' +
                         '<span class="top-units">' + num(p.units) + ' units</span>' +
-                        '<span style="color:#16a34a; font-variant-numeric:tabular-nums;">' + money(p.profit) + '</span>' +
+                        '<span style="color:#15803d; font-variant-numeric:tabular-nums;">' + money(p.profit) + '</span>' +
                         '</span>';
                     list.appendChild(row);
                 });
@@ -435,7 +442,7 @@
                         labels: wd.labels,
                         datasets: [{ label: 'Units', data: wd.values,
                                      backgroundColor: wd.values.map(function (v) {
-                                         return best > 0 && v === best ? '#18181b' : '#d4d4d8';
+                                         return best > 0 && v === best ? '#15803d' : '#dbeafe';
                                      }),
                                      borderRadius: 6, maxBarThickness: 30 }]
                     },
@@ -451,7 +458,13 @@
                 });
             }
 
-            render('day');
+            var defaultRange = (document.getElementById('range-toggle') || {}).dataset
+                ? document.getElementById('range-toggle').dataset.default : 'day';
+            defaultRange = defaultRange || 'day';
+            document.querySelectorAll('#range-toggle button').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.range === defaultRange);
+            });
+            render(defaultRange);
         })();
     </script>
 </body>
