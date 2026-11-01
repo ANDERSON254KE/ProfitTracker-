@@ -7,6 +7,7 @@ production database (for example after adding a new shop).
 Usage::
 
     python manage.py setup_initial_data
+
 """
 
 from decimal import Decimal
@@ -24,11 +25,11 @@ SHOPS = [
     ("Small City", "Small City, Nairobi"),
 ]
 
-#: (username, shop name) for the branch managers created by this command.
-MANAGERS = [
-    ("figtree", "Fig Tree"),
-    ("empire", "Empire Shop"),
-]
+#: Two manager usernames per shop.
+MANAGERS_SHOPS = {
+    "Fig Tree": ["figtree1", "figtree2"],
+    "Empire Shop": ["empire1", "empire2"],
+}
 
 OWNER_USERNAME = "owner"
 OWNER_PASSWORD = "SecurePassword123!"
@@ -97,7 +98,7 @@ class Command(BaseCommand):
         self.stdout.write("")
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done. Owner '{OWNER_USERNAME}' and {len(MANAGERS)} manager(s) "
+                f"Done. Owner '{OWNER_USERNAME}' and {sum(len(v) for v in MANAGERS_SHOPS.values())} manager(s) "
                 f"across {len(shops)} shop(s)."
             )
         )
@@ -145,40 +146,44 @@ class Command(BaseCommand):
         return owner
 
     def _create_managers(self, shops):
-        """Create one MANAGER per shop listed in :data:`MANAGERS`.
+        """Create two MANAGERS per shop listed in :data:`MANAGERS_SHOPS`.
 
         ``assigned_shop`` and ``Shop.manager`` are both set so the access
-        mixins and the admin agree.
+        mixins and the admin agree. The ``shop.manager`` link will be set
+        to the first manager created; the second manager is scoped via
+        ``assigned_shop``.
         """
-        for username, shop_name in MANAGERS:
+        for shop_name, usernames in MANAGERS_SHOPS.items():
             shop = shops.get(shop_name)
             if shop is None:
                 continue
 
-            user, created = CustomUser.objects.get_or_create(
-                username=username,
-                defaults={
-                    "role": CustomUser.Role.MANAGER,
-                    "assigned_shop": shop,
-                    "email": f"{username}@example.com",
-                },
-            )
-            if created:
-                user.set_password(MANAGER_PASSWORD)
-            elif user.assigned_shop_id != shop.pk:
-                user.assigned_shop = shop
-            if user.role != CustomUser.Role.MANAGER:
-                user.role = CustomUser.Role.MANAGER
-            user.save()
+            for i, username in enumerate(usernames):
+                user, created = CustomUser.objects.get_or_create(
+                    username=username,
+                    defaults={
+                        "role": CustomUser.Role.MANAGER,
+                        "assigned_shop": shop,
+                        "email": f"{username}@example.com",
+                    },
+                )
+                if created:
+                    user.set_password(MANAGER_PASSWORD)
+                elif user.assigned_shop_id != shop.pk:
+                    user.assigned_shop = shop
+                if user.role != CustomUser.Role.MANAGER:
+                    user.role = CustomUser.Role.MANAGER
+                user.save()
 
-            if shop.manager_id != user.pk:
-                shop.manager = user
-                shop.save(update_fields=["manager"])
+                # Set shop.manager to the first manager only
+                if i == 0 and shop.manager_id != user.pk:
+                    shop.manager = user
+                    shop.save(update_fields=["manager"])
 
-            self.stdout.write(
-                f"  user     {username} (manager of {shop_name})"
-                + ("" if created else "  (already existed)")
-            )
+                self.stdout.write(
+                    f"  user     {username} (manager of {shop_name})"
+                    + ("" if created else "  (already existed)")
+                )
 
     def _create_products(self, shops):
         """Create the master catalogue and every shop's price card."""
@@ -218,4 +223,4 @@ class Command(BaseCommand):
         self.stdout.write(
             f"  pricing  {created} shop product(s) created, {updated} updated "
             f"across {len(shops)} shop(s)"
-        )
+        )
