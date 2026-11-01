@@ -144,8 +144,18 @@ hr { border-color: var(--sd-border); opacity: 1; }
 .btn-danger { background: var(--sd-red); border-color: var(--sd-red); }
 .btn-info { background: #0891b2; border-color: #0891b2; color: #fff; }
 .btn-info:hover { background: #0e7490; border-color: #0e7490; color: #fff; }
-.btn-outline-secondary { border-color: var(--sd-border); color: var(--sd-muted); }
-.btn-outline-secondary:hover { background: #f4f4f5; border-color: var(--sd-border); color: var(--sd-fg); }
+.btn-outline-secondary { border-color: var(--sd-border); color: var(--sd-muted); }.btn-outline-secondary:hover { background: #f4f4f5; border-color: var(--sd-border); color: var(--sd-fg); }
+
+.btn-dark { background: var(--sd-brand); border-color: var(--sd-brand); color: #fafafa; }
+.btn-dark:hover, .btn-dark:focus, .btn-dark:active {
+    background: var(--sd-primary-hover); border-color: var(--sd-primary-hover); color: #fafafa;
+}
+
+.btn-outline-dark { background: transparent; border-color: var(--sd-brand); color: var(--sd-brand); }
+.btn-outline-dark:hover, .btn-outline-dark:focus, .btn-outline-dark.active {
+    background: var(--sd-brand-soft); border-color: var(--sd-brand); color: var(--sd-fg);
+}
+
 .btn-light { background: #fff; border-color: var(--sd-border); color: var(--sd-fg); }
 .btn-check:focus-visible + .btn, .btn:focus-visible { box-shadow: var(--sd-ring); }
 

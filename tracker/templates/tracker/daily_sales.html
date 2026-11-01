@@ -16,6 +16,11 @@
         .price-input { width: 85px; }
         .qty-input { width: 100px; }
 
+@media (max-width: 640px) {
+    .price-input, .qty-input { width: 100% !important; margin-bottom: .5rem !important; }
+    .price-input + .price-input, .qty-input + .qty-input { margin-top: .5rem !important; }
+}
+
         /* --- shadcn swipe actions (swipe a row left → Edit / Delete) --- */
         .sheet-row { touch-action: pan-y; }
         .actions-cell { width: 96px; }
