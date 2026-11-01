@@ -170,6 +170,17 @@ hr { border-color: var(--sd-border); opacity: 1; }
     border-color: var(--sd-primary) !important;
     box-shadow: var(--sd-ring) !important;
 }
+
+/* Price inputs: ensure selling/cost prices stand out on mobile */
+.price-input, .qty-input {
+    border: 1px solid var(--sd-border) !important;
+    background: #fff !important;
+    color: var(--sd-fg) !important;
+}
+.price-input:focus, .qty-input:focus {
+    border-color: var(--sd-primary) !important;
+    background: #fafafa !important;
+}
 .form-control::placeholder { color: var(--sd-faint); }
 .form-label {
     font-size: .7rem;
