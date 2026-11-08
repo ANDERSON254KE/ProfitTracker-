@@ -507,13 +507,74 @@ class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
 
 
 
-class ProductComparisonView(OwnerRequiredMixin, TemplateView):
-    """Product comparison across shops: profits, sales, and trends for selected products.
 
-    Allows the owner to select up to 5 products and compare their performance
-    across all shops, showing profit, units sold, revenue, and trends.
-    Includes CSV export functionality.
-    """
+def admin_shop_sheet(request, shop):
+    """Admin shop sheet view: daily sales sheet for a specific shop."""
+    from datetime import date
+    from decimal import Decimal
+
+    from django.contrib import messages
+    from django.db.models import Sum
+    from django.http import Http404
+    from django.shortcuts import render
+    from tracker.models import DailySale, DayTotals, Product
+
+    # Resolve shop name to shop code
+    shop_choices = {
+        "Emirates": "Emirates",
+        "Empire Shop": "Empire Shop",
+        "Fig Tree": "Fig Tree",
+        "Small City": "Small City",
+    }
+    if shop not in shop_choices:
+        raise Http404(f"Shop '{shop}' not found")
+
+    shop_code = shop
+
+    # Get the date from GET params, default to today
+    date_iso = request.GET.get("date", date.today().isoformat())
+    sheet_date = date.fromisoformat(date_iso)
+
+    # Fetch rows for this shop and date
+    rows = DailySale.objects.filter(shop=shop_code, date=sheet_date).select_related("product")
+
+    # Compute KPIs
+    total_units = sum(r.quantity_sold for r in rows)
+    total_sales_value = sum(r.sell_price * r.quantity_sold for r in rows)
+    total_profit = sum(r.profit for r in rows)
+    expenses = DayTotals.objects.filter(shop=shop_code, date=sheet_date).aggregate(
+        Sum("total_expenditure")
+    )["total_expenditure__sum"] or 0
+
+    net_profit = total_profit - expenses
+
+    # Build chips for date navigation (distinct dates with data)
+    chips = DayTotals.objects.filter(shop=shop_code).values("date").annotate(
+        net=Sum(F("total_profit") - F("total_expenditure"))
+    )
+
+    # Available products for adding new rows
+    products = Product.objects.all()
+
+    context = {
+        "shop": shop,
+        "sheet_date": sheet_date,
+        "sheet_date_iso": date_iso,
+        "rows": rows,
+        "total_units": total_units,
+        "total_sales_value": total_sales_value,
+        "total_profit": total_profit,
+        "expenses": expenses,
+        "net_profit": net_profit,
+        "chips": chips,
+        "products": products,
+    }
+    return render(request, "tracker/admin_shop_sheet.html", context)
+
+
+
+class ProductComparisonView(OwnerRequiredMixin, TemplateView):
+    """Product comparison across shops: profits, sales, and trends for selected products."""
 
     template_name = "tracker/product_comparison.html"
 
