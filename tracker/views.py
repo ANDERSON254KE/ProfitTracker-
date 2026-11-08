@@ -1,1401 +1,729 @@
-from django.shortcuts import render, redirect, get_object_or_404
+"""Views for the multi-shop profit tracker.
+
+Role rules applied throughout:
+
+* OWNER  - sees every shop: the cross-shop dashboard and the price editor.
+* MANAGER - sees only ``request.user.assigned_shop``: their dashboard, their
+  recent sales, and the form used to record a new sale.
+
+Profit is never summed from client-supplied numbers; every figure below is
+aggregated from :class:`~tracker.models.DailySale` rows whose money columns are
+computed by the model.
+"""
+
+from datetime import timedelta
+from decimal import Decimal
+
 from django.contrib import messages
-from django.contrib.admin.views.decorators import staff_member_required
-from django.db.models import Count, Sum, Q
-from django.http import Http404, HttpResponse, JsonResponse
+from django.contrib.auth import login
+from django.contrib.auth.views import LoginView as AuthLoginView
+from django.contrib.auth.views import LogoutView as AuthLogoutView
+from django.db.models import Sum
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from io import BytesIO
-from decimal import Decimal, InvalidOperation
-from datetime import date, datetime, timedelta
-import json
-import re
-from rapidfuzz import process, fuzz
-import pandas as pd
-from .models import Product, Transaction, DailySale, ProductShopPrice, DayTotals
+from django.utils import timezone
+from django.views.generic import CreateView, RedirectView, TemplateView, View
 
-SALES_CATEGORIES = ['250ml', '350ml', '750ml', 'soda', 'cans']
-SHOPS = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City', 'Chambers Point']
-# Chambers Point is excluded from the combined "All Shops" workbook: it has
-# its own day-export (daily_sales_chambers_export) with its own filename.
-ALL_SHOPS_EXPORT = ['Fig Tree', 'Empire Shop', 'Emirates', 'Small City']
-CHAMBERS_SHOP = 'Chambers Point'
+from .forms import DailySaleForm, DailySalesSheetForm, ShopPricingForm
+from .mixins import (
+    LoginRequiredMixin,
+    ManagerRequiredMixin,
+    ManagerShopAccessMixin,
+    OwnerRequiredMixin,
+)
+from .models import CustomUser, DailySale, Shop, ShopProduct
+from .price_list import price_list_rank
 
-
-def _shop_price_overrides(shop):
-    """Return {product_id: selling_price} for shop-specific price overrides."""
-    return {
-        sp.product_id: sp.selling_price
-        for sp in ProductShopPrice.objects.filter(shop=shop)
-        if sp.selling_price is not None
-    }
+#: Number of days shown in the owner's "recent days" table.
+OWNER_TREND_DAYS = 7
+#: Number of recent sale lines shown on a manager's dashboard.
+MANAGER_HISTORY_ROWS = 15
+#: Kenyan shillings symbol used by the ``ksh`` template filter.
+CURRENCY = "KSh"
 
 
-def _shop_cost_overrides(shop):
-    """Return {product_id: cost_price} for shop-specific cost overrides."""
-    return {
-        sp.product_id: sp.cost_price
-        for sp in ProductShopPrice.objects.filter(shop=shop)
-        if sp.cost_price is not None
-    }
-
-
-def _save_shop_cost_override(shop, product, cost):
-    """Persist a manually-changed cost price for one shop only.
-
-    Setting it back to the product's default cost clears the override so the
-    shop follows the global price again.
-    """
-    override, _ = ProductShopPrice.objects.get_or_create(product=product, shop=shop)
-    if cost is None or cost == product.cost_price:
-        if override.cost_price is not None:
-            override.cost_price = None
-            override.save(update_fields=['cost_price'])
-        if override.selling_price is None and override.cost_price is None:
-            override.delete()
-    elif override.cost_price != cost:
-        override.cost_price = cost
-        override.save(update_fields=['cost_price'])
-
-
-def dashboard(request):
-    query = request.GET.get('q', '').strip()
-    products = Product.objects.all()
-    
-    # 1. Search Logic (Fuzzy Match Support)
-    if query:
-        products = Product.objects.filter(Q(product_name__icontains=query) | Q(shop__icontains=query))
-        if not products.exists():
-            choices = {p.id: p.product_name for p in Product.objects.all()}
-            fuzzy_ids = [res[2] for res in process.extract(query, choices, scorer=fuzz.WRatio, limit=5) if res[1] > 60]
-            products = Product.objects.filter(id__in=fuzzy_ids)
-    else:
-        products = products[:4]
-
-    # 2. Total Business Metrics
-    audit_profit = Transaction.objects.filter(type='SALES_CHECK').aggregate(Sum('profit'))['profit__sum'] or 0
-    audit_used = Transaction.objects.filter(type='SALES_CHECK').aggregate(Sum('units_used'))['units_used__sum'] or 0
-    daily_profit = DailySale.objects.aggregate(Sum('profit'))['profit__sum'] or 0
-    daily_used = DailySale.objects.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or 0
-    total_profit = audit_profit + daily_profit
-    total_used = audit_used + daily_used
-
-    today = date.today()
-    today_profit = (
-        DailySale.objects.filter(date=today).aggregate(Sum('profit'))['profit__sum'] or 0
-    ) + (
-        Transaction.objects.filter(type='SALES_CHECK', date=today).aggregate(Sum('profit'))['profit__sum'] or 0
-    )
-    today_units = (
-        DailySale.objects.filter(date=today).aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or 0
-    )
-    
-    # 3. Recent History
-    history = Transaction.objects.filter(type='SALES_CHECK').order_by('-date')[:10]
-
-    # 4. Shop profits by date range
-    range_start = _strict_date(request.GET.get('range_start'))
-    range_end = _strict_date(request.GET.get('range_end'))
-    if not range_start and not range_end:
-        # Show the last 30 days by default so the table is not empty when
-        # nothing was entered for today.
-        range_start = today - timedelta(days=29)
-        range_end = today
-    elif not range_start or not range_end or range_end < range_start:
-        range_start = today
-        range_end = today
-
-    shop_daily = (
-        DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
-        .values('date', 'shop')
-        .annotate(total_profit=Sum('profit'))
-        .order_by('date', 'shop')
-    )
-    profit_map = {}
-    for row in shop_daily:
-        d = row['date']
-        if d not in profit_map:
-            profit_map[d] = {}
-        profit_map[d][row['shop']] = float(row['total_profit'])
-
-    # Aggregate expenses by date and shop (from DayTotals)
-    exp_map = {}
-    day_exp = DayTotals.objects.filter(date__gte=range_start, date__lte=range_end)
-    for r in day_exp.values('date', 'shop', 'total_expenditure'):
-        d = r['date']
-        if d not in exp_map:
-            exp_map[d] = {}
-        exp_map[d][r['shop']] = float(r['total_expenditure'])
-
-    # Build list of dates and row data (NET = profit minus expenses)
-    dates_range = []
-    cur = range_start
-    while cur <= range_end:
-        dates_range.append(cur)
-        cur += timedelta(days=1)
-
-    shop_profits_table = []
-    totals = {s.replace(' ', '_'): 0.0 for s in SHOPS}
-    grand_total = 0.0
-    for d in dates_range:
-        row = {'date': d, 'day_total': 0.0}
-        for s in SHOPS:
-            val = profit_map.get(d, {}).get(s, 0.0)
-            key = s.replace(' ', '_')
-            exp = exp_map.get(d, {}).get(s, 0.0)
-            net = val - exp
-            row[key] = net
-            totals[key] += net
-            row['day_total'] += net
-        grand_total += row['day_total']
-        shop_profits_table.append(row)
-
-    # Shop columns rendered dynamically so adding a shop (e.g. Chambers Point)
-    # doesn't leave the hardcoded table body short a column.
-    shop_keys = [s.replace(' ', '_') for s in SHOPS]
-    for row in shop_profits_table:
-        row['cells'] = [row.get(key, 0.0) for key in shop_keys]
-    shop_totals_list = [totals.get(key, 0.0) for key in shop_keys]
-
-    analytics = _build_analytics()
-    # Open on the widest range that actually has data, so the charts are never
-    # blank on a day with no sales yet.
-    analytics_default = 'month'
-    if analytics['day']['rows']:
-        analytics_default = 'day'
-    elif analytics['week']['rows']:
-        analytics_default = 'week'
-
-    return render(request, 'tracker/dashboard.html', {
-        'products': products,
-        'total_profit': total_profit,
-        'total_used': total_used,
-        'today_profit': today_profit,
-        'today_units': today_units,
-        'history': history,
-        'query': query,
-        'range_start': range_start,
-        'range_end': range_end,
-        'shop_profits_table': shop_profits_table,
-        'shop_totals': totals,
-        'shop_totals_list': shop_totals_list,
-        'shop_grand_total': grand_total,
-        'shops': SHOPS,
-        'analytics_json': json.dumps(analytics),
-        'analytics_default': analytics_default,
-    })
-
-def views_product_detail(request, pk):
-    product = get_object_or_404(Product, pk=pk)
-    
-    # Calculate state since last audit
-    last_audit = Transaction.objects.filter(product=product, type='SALES_CHECK').first()
-    prev_rem = last_audit.current_remaining if last_audit else 0
-    
-    restocks = Transaction.objects.filter(product=product, type='RESTOCK')
-    if last_audit:
-        restocks = restocks.filter(created_at__gt=last_audit.created_at)
-        
-    total_added = restocks.aggregate(Sum('quantity'))['quantity__sum'] or 0
-    
-    if request.method == "POST":
-        action = request.POST.get('action')
-        manual_date = _parse_date(request.POST.get('transaction_date'))
-        
-        if action == "RESTOCK":
-            qty = int(request.POST.get('quantity', 0))
-            Transaction.objects.create(product=product, type='RESTOCK', quantity=qty, date=manual_date)
-            return redirect('product_detail', pk=pk)
-            
-        elif action == "AUDIT":
-            current = int(request.POST.get('current_remaining', 0))
-            sell_price_val = request.POST.get('sell_price')
-            manual_sell = Decimal(sell_price_val) if sell_price_val else product.selling_price
-            transaction = Transaction.objects.create(
-                product=product, 
-                type='SALES_CHECK', 
-                prev_remaining=prev_rem,
-                quantity=total_added,
-                current_remaining=current,
-                sell_price_used=manual_sell,
-                date=manual_date
-            )
-            return render(request, 'tracker/audit_results.html', {'transaction': transaction})
-
-    return render(request, 'tracker/product_detail.html', {
-        'product': product,
-        'prev_rem': prev_rem,
-        'total_added': total_added,
-        'restocks': restocks.order_by('-date'),
-        'today_date': date.today().strftime('%Y-%m-%d')
-    })
-
-def _parse_date(value):
-    if not value:
-        return date.today()
-    try:
-        return datetime.strptime(str(value), '%Y-%m-%d').date()
-    except (ValueError, TypeError):
-        return date.today()
-
-def _parse_decimal(value):
+def _money(value) -> Decimal:
+    """Coerce an aggregate (``Decimal``, ``None`` or ``int``) to a Decimal."""
     if value is None:
-        return None
-    try:
-        value = Decimal(str(value).strip())
-        return value if value.is_finite() else None
-    except (InvalidOperation, TypeError, ValueError):
-        return None
-
-def _sale_products():
-    products = list(Product.objects.all())
-    products.sort(key=lambda p: (p.order, p.product_name.lower()))
-    return products
-
-def daily_sales_product_lookup(request):
-    name = request.GET.get('name', '').strip()
-    shop = request.GET.get('shop', '').strip()
-    product = Product.objects.filter(product_name__iexact=name).first()
-    if product is not None:
-        selling_price = product.selling_price
-        cost_price = product.cost_price
-        if shop in SHOPS:
-            override = ProductShopPrice.objects.filter(product=product, shop=shop).first()
-            if override:
-                if override.selling_price is not None:
-                    selling_price = override.selling_price
-                if override.cost_price is not None:
-                    cost_price = override.cost_price
-        return JsonResponse({
-            'found': True,
-            'cost_price': str(cost_price),
-            'selling_price': str(selling_price),
-            'category': product.category or '',
-        })
-    return JsonResponse({'found': False})
+        return Decimal("0.00")
+    return Decimal(str(value))
 
 
-def daily_sales(request):
-    shop = request.session.get('daily_sales_shop', '')
+def _shop_sales(shop):
+    """Return the DailySale queryset for one shop (used by both dashboards)."""
+    return DailySale.objects.filter(shop=shop).select_related("product", "recorded_by")
 
-    # Persist the chosen date in the session so it survives shop switches.
-    date_param = request.GET.get('date')
-    if date_param:
-        request.session['daily_sales_date'] = date_param
 
-    if request.GET.get('reset'):
-        request.session['daily_sales_shop'] = ''
-        return redirect(reverse('daily_sales'))
-    if request.GET.get('reset_date'):
-        request.session['daily_sales_date'] = ''
-        return redirect(reverse('daily_sales'))
+def _input_value(value) -> str:
+    """Render a stock figure for an HTML input: '' when there is no figure yet."""
+    if value is None:
+        return ""
+    return str(value)
 
-    if request.method == "POST":
-        if request.POST.get('entry_type') == 'shop':
-            selected = request.POST.get('shop', '').strip()
-            if selected in SHOPS:
-                request.session['daily_sales_shop'] = selected
-            return redirect(reverse('daily_sales'))
 
-        # Delete a product row from the sheet (duplicate / wrong-category
-        # clean-up). Cascades to its sales, price overrides and transactions.
-        if request.POST.get('entry_type') == 'delete_item':
-            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
-            try:
-                pk = int(request.POST.get('product_id') or 0)
-            except (TypeError, ValueError):
-                pk = 0
-            product = Product.objects.filter(pk=pk).first()
-            if product is not None:
-                product.delete()
-            return redirect(f"{reverse('daily_sales')}?deleted=1&date={sale_date}")
+class LoginView(AuthLoginView):
+    """Sign a user in and send them to the dashboard for their role."""
 
-        # Inline edit of a sheet product: name / category / default prices,
-        # saved straight from the row's edit panel.
-        if request.POST.get('entry_type') == 'update_item':
-            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
-            try:
-                pk = int(request.POST.get('product_id') or 0)
-            except (TypeError, ValueError):
-                pk = 0
-            product = Product.objects.filter(pk=pk).first()
-            if product is not None:
-                name = (request.POST.get('product_name') or '').strip()
-                category = (request.POST.get('category') or '').strip()
-                selling = _parse_decimal(request.POST.get('selling_price'))
-                cost = _parse_decimal(request.POST.get('cost_price'))
-                if name:
-                    product.product_name = name
-                if category:
-                    product.category = category
-                if selling is not None:
-                    product.selling_price = selling
-                if cost is not None:
-                    product.cost_price = cost
-                product.save()
-            return redirect(f"{reverse('daily_sales')}?edited=1&date={sale_date}")
+    template_name = "tracker/login.html"
+    redirect_authenticated_user = True
 
-        if request.POST.get('entry_type') == 'bulk':
-            shop = request.session.get('daily_sales_shop', '')
-            if shop not in SHOPS:
-                return redirect(reverse('daily_sales'))
-            sale_date = _parse_date(request.POST.get('sale_date')) or date.today()
+    def get_success_url(self) -> str:
+        """Route the user to their role's dashboard."""
+        return self.get_redirect_url() or "/"
 
-            existing = {
-                s.product_id: s for s in
-                DailySale.objects.filter(shop=shop, date=sale_date)
-            }
-            overrides = _shop_price_overrides(shop)
-            cost_overrides = _shop_cost_overrides(shop)
-
-            for product in _sale_products():
-                qty = _parse_decimal(request.POST.get('qty_%d' % product.pk))
-                sell_price = _parse_decimal(request.POST.get('sell_%d' % product.pk))
-                cost_price = _parse_decimal(request.POST.get('cost_%d' % product.pk))
-                sale = existing.get(product.pk)
-                # A manually-changed cost price sticks to this shop only, so
-                # editing it here (e.g. Fig Tree) never touches other shops.
-                if cost_price is not None and cost_price != cost_overrides.get(product.pk, product.cost_price):
-                    _save_shop_cost_override(shop, product, cost_price)
-                    if cost_price == product.cost_price:
-                        cost_overrides.pop(product.pk, None)
-                    else:
-                        cost_overrides[product.pk] = cost_price
-                if qty and qty > 0:
-                    sell = sell_price if sell_price is not None else overrides.get(product.pk, product.selling_price)
-                    cost = cost_price if cost_price is not None else cost_overrides.get(product.pk, product.cost_price)
-                    if sale:
-                        sale.quantity_sold = qty
-                        sale.sell_price = sell
-                        sale.cost_price = cost
-                        sale.save()
-                    else:
-                        DailySale.objects.create(
-                            product=product,
-                            shop=shop,
-                            quantity_sold=qty,
-                            sell_price=sell,
-                            cost_price=cost,
-                            date=sale_date,
-                        )
-                elif sale:
-                    sale.delete()
-
-            names = request.POST.getlist('manual_name')
-            buys = request.POST.getlist('manual_buy')
-            sells = request.POST.getlist('manual_sell')
-            qtys = request.POST.getlist('manual_qty')
-            cats = request.POST.getlist('manual_category')
-            for i in range(len(names)):
-                name = names[i].strip()
-                qty = _parse_decimal(qtys[i]) if i < len(qtys) else None
-                sell = _parse_decimal(sells[i]) if i < len(sells) else None
-                buy = _parse_decimal(buys[i]) if i < len(buys) else None
-                cat = cats[i].strip() if i < len(cats) else ''
-                if name and qty and qty > 0 and sell and sell > 0:
-                    product = Product.objects.filter(product_name__iexact=name).first()
-                    if product is None:
-                        product = Product.objects.create(
-                            product_name=name,
-                            cost_price=buy if buy is not None else Decimal('0.00'),
-                            selling_price=sell,
-                            category=cat or 'MANUAL',
-                        )
-                    else:
-                        if buy is not None:
-                            # Shop-specific: don't overwrite the global cost.
-                            _save_shop_cost_override(shop, product, buy)
-                            if buy == product.cost_price:
-                                cost_overrides.pop(product.pk, None)
-                            else:
-                                cost_overrides[product.pk] = buy
-                        product.selling_price = sell
-                        if cat:
-                            product.category = cat
-                        product.save()
-                    sale, created = DailySale.objects.get_or_create(
-                        product=product,
-                        shop=shop,
-                        date=sale_date,
-                        defaults={
-                            'quantity_sold': qty,
-                            'sell_price': sell,
-                            'cost_price': buy if buy is not None else cost_overrides.get(product.pk, product.cost_price),
-                        },
-                    )
-                    if not created:
-                        sale.quantity_sold = qty
-                        sale.sell_price = sell
-                        sale.cost_price = buy if buy is not None else cost_overrides.get(product.pk, product.cost_price)
-                        sale.save()
-
-            # Manually-typed day totals (Total Sales / Profit / Expenditure) for
-            # the copyable all-branches Day Summary.
-            DayTotals.objects.update_or_create(
-                shop=shop,
-                date=sale_date,
-                defaults={
-                    'total_sales': _parse_decimal(request.POST.get('total_sales')) or Decimal('0.00'),
-                    'total_profit': _parse_decimal(request.POST.get('total_profit')) or Decimal('0.00'),
-                    'total_expenditure': _parse_decimal(request.POST.get('total_expenditure')) or Decimal('0.00'),
-                },
-            )
-
-            return redirect(f"{reverse('daily_sales')}?saved=1&date={sale_date}")
-
-    if shop not in SHOPS:
-        return render(request, 'tracker/daily_sales.html', {
-            'pick_shop': True,
-            'shops': SHOPS,
-        })
-
-    sale_date = (
-        _parse_date(request.GET.get('date'))
-        or _parse_date(request.session.get('daily_sales_date'))
-        or date.today()
-    )
-    products = _sale_products()
-
-    existing = {
-        s.product_id: s for s in
-        DailySale.objects.filter(shop=shop, date=sale_date)
-    }
-    overrides = _shop_price_overrides(shop)
-    cost_overrides = _shop_cost_overrides(shop)
-
-    # Expenditure is the single value the user types (DayTotals), not itemized.
-    day_totals = DayTotals.objects.filter(shop=shop, date=sale_date).first()
-    total_expenses = day_totals.total_expenditure if day_totals else Decimal('0.00')
-
-    saved = request.GET.get('saved') == '1'
-    sales_profit = net_profit = Decimal('0.00')
-    if saved:
-        sales_profit = (
-            DailySale.objects.filter(shop=shop, date=sale_date)
-            .aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
+    def form_valid(self, form):
+        """Log the user in, remembering an explicit ``next`` when present."""
+        response = super().form_valid(form)
+        messages.success(
+            self.request,
+            f"Welcome back, {self.request.user.get_full_name() or self.request.user.username}.",
         )
-        net_profit = sales_profit - total_expenses
+        return response
 
-    categories_data = []
-    grouped = {}
-    for p in products:
-        if not p.category or p.category == 'MANUAL':
-            continue
-        grouped.setdefault(p.category, []).append(p)
-    for cat in sorted(grouped, key=lambda c: min(p.order for p in grouped[c])):
-        cat_products = grouped[cat]
-        rows = []
-        for p in cat_products:
-            sale = existing.get(p.pk)
-            rows.append((
-                p,
-                sale.quantity_sold if sale else '',
-                overrides.get(p.pk, p.selling_price),
-                sale.cost_price if sale else cost_overrides.get(p.pk, p.cost_price),
-            ))
-        categories_data.append({'name': cat, 'rows': rows})
 
-    custom_products = [p for p in products if p.category == 'MANUAL']
-    if custom_products:
-        rows = []
-        for p in custom_products:
-            sale = existing.get(p.pk)
-            rows.append((
-                p,
-                sale.quantity_sold if sale else '',
-                overrides.get(p.pk, p.selling_price),
-                sale.cost_price if sale else cost_overrides.get(p.pk, p.cost_price),
-            ))
-        categories_data.append({'name': 'Custom', 'rows': rows})
+class LogoutView(AuthLogoutView):
+    """Sign a user out and return them to the login page.
 
-    manual_categories = SALES_CATEGORIES + sorted(
-        c for c in Product.objects.values_list('category', flat=True).distinct()
-        if c and c not in SALES_CATEGORIES
-    )
+    Django 5+ only accepts POST for logout, so the nav bar posts a form here.
+    """
 
-    # Manually-typed day totals: this branch's saved values (to pre-fill the
-    # inputs) and every branch's values for the same date (for the popup).
-    def _prefill(v):
-        return ('%0.2f' % v) if v else ''
+    http_method_names = ["post", "options"]
 
-    saved_totals = {dt.shop: dt for dt in DayTotals.objects.filter(date=sale_date)}
-    branch_totals = {}
-    for name in SHOPS:
-        dt = saved_totals.get(name)
-        branch_totals[name] = {
-            'sales': float(dt.total_sales) if dt else 0.0,
-            'profit': float(dt.total_profit) if dt else 0.0,
-            'exp': float(dt.total_expenditure) if dt else 0.0,
+
+class DashboardRedirectView(LoginRequiredMixin, RedirectView):
+    """Send a signed-in user to the dashboard that matches their role."""
+
+    permanent = False
+
+    def get_redirect_url(self, *args, **kwargs) -> str:
+        """Return the owner's or the manager's dashboard URL."""
+        if self.request.user.is_owner():
+            return reverse("owner_dashboard")
+        return reverse("manager_dashboard")
+
+
+class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
+    """Cross-shop performance for the owner: totals, per-shop profit, 7-day trend.
+
+    :class:`~tracker.mixins.OwnerRequiredMixin` already applies
+    ``LoginRequiredMixin``, so anonymous users are sent to the login page and
+    managers get a 403.
+    """
+
+    template_name = "tracker/owner_dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        """Aggregate profit and units for all shops and the last 7 days."""
+        context = super().get_context_data(**kwargs)
+        today = timezone.localdate()
+        window_start = today - timedelta(days=OWNER_TREND_DAYS - 1)
+
+        sales = DailySale.objects.select_related("product", "shop")
+        shops = list(Shop.objects.all())
+        context["shops"] = shops
+
+        # Overall totals across every shop.
+        overall = sales.aggregate(
+            profit=Sum("profit"),
+            units=Sum("units_sold"),
+            revenue=Sum("total_revenue"),
+        )
+        context["total_profit"] = _money(overall["profit"])
+        context["total_units"] = _money(overall["units"])
+        context["total_revenue"] = _money(overall["revenue"])
+
+        # Per-shop profit, units and amount sold, one row per shop (zero-sold shops included).
+        per_shop = {
+            row["shop"]: row
+            for row in sales.values("shop")
+            .annotate(
+                profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+            )
+        }
+        shop_rows = []
+        for shop in shops:
+            row = per_shop.get(shop.pk, {})
+            shop_rows.append(
+                {
+                    "shop": shop,
+                    "profit": _money(row.get("profit")),
+                    "units": _money(row.get("units")),
+                    "revenue": _money(row.get("revenue")),
+                }
+            )
+        shop_rows.sort(key=lambda r: r["profit"], reverse=True)
+        context["shop_rows"] = shop_rows
+
+        # Last 7 days as an explicit table (one row per day, one column per
+        # shop). Cells are built in `shops` order so they line up with the
+        # table header, which is rendered from the same list.
+        days = [window_start + timedelta(days=i) for i in range(OWNER_TREND_DAYS)]
+        trend = sales.filter(sale_date__gte=window_start).values("sale_date", "shop").annotate(
+            profit=Sum("profit")
+        )
+        trend_map = {}
+        for row in trend:
+            trend_map.setdefault(row["sale_date"], {})[row["shop"]] = _money(row["profit"])
+
+        trend_rows = []
+        for day in days:
+            cells = trend_map.get(day, {})
+            values = [cells.get(shop.pk, Decimal("0.00")) for shop in shops]
+            trend_rows.append(
+                {
+                    "date": day,
+                    "cells": values,
+                    "day_total": sum(values, Decimal("0.00")),
+                    "is_today": day == today,
+                }
+            )
+        context["trend_rows"] = trend_rows
+        context["today"] = today
+        return context
+
+
+class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
+    """Shop-scoped performance for a manager."""
+
+    template_name = "tracker/manager_dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        """Build today's, lifetime and recent-sale figures for the user's shop."""
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+        shop = user.assigned_shop
+        today = timezone.localdate()
+
+        if shop is None:
+            context["shop"] = None
+            context["has_shop"] = False
+            return context
+
+        context["shop"] = shop
+        context["has_shop"] = True
+        context["today"] = today
+
+        sales = _shop_sales(shop)
+
+        today_row = sales.filter(sale_date=today).aggregate(
+            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+        )
+        context["today_profit"] = _money(today_row["profit"])
+        context["today_units"] = _money(today_row["units"])
+        context["today_revenue"] = _money(today_row["revenue"])
+
+        lifetime = sales.aggregate(profit=Sum("profit"), units=Sum("units_sold"))
+        context["total_profit"] = _money(lifetime["profit"])
+        context["total_units"] = _money(lifetime["units"])
+
+        context["recent_sales"] = sales.order_by("-sale_date", "-id")[:MANAGER_HISTORY_ROWS]
+        context["sale_form_url"] = reverse("daily_sales_sheet")
+        return context
+
+
+class DailySaleCreateView(LoginRequiredMixin, ManagerShopAccessMixin, CreateView):
+    """Record a new sale for the manager's shop.
+
+    The shop is forced by :class:`ManagerShopAccessMixin`, the prices are
+    locked in by ``DailySale.save``, and the user is stamped onto the row.
+    """
+
+    model = DailySale
+    form_class = DailySaleForm
+    template_name = "tracker/daily_sale_form.html"
+
+    def get_form_kwargs(self):
+        """Pass the resolved shop into the form so it can scope its choices."""
+        kwargs = super().get_form_kwargs()
+        kwargs["shop"] = self.shop
+        return kwargs
+
+    def form_valid(self, form):
+        """Stamp the recorder, save, and confirm the server-calculated profit."""
+        # Set before saving: the form only covers product and quantity, and
+        # recorded_by is not a client-supplied field.
+        form.instance.recorded_by = self.request.user
+        response = super().form_valid(form)
+        sale = self.object
+        messages.success(
+            self.request,
+            f"Recorded {sale.units_sold} x {sale.product} at {self.shop.name}. "
+            f"Profit: {CURRENCY} {sale.profit:,.2f}.",
+        )
+        return response
+
+    def get_success_url(self) -> str:
+        """Return to the manager's dashboard after saving."""
+        return f"{reverse('manager_dashboard')}?recorded=1"
+
+
+class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, TemplateView):
+    """Record a whole trading day for the manager's shop in one submit.
+
+    ``GET`` lists the shop's products in the owner's price-list row order
+    (250ml first, down to soda) with their opening stock -- the previous day's
+    closing stock -- and boxes for additional stock, total stock and closing
+    stock; sold units and the amount sold are derived server side. Products
+    with no cost price are not shown: they cannot produce a profit, so the
+    owner must price them first.
+
+    ``POST`` upserts one stock row per filled-in product for today: submitting
+    again replaces today's figures instead of double-counting them.
+    """
+
+    template_name = "tracker/daily_sales_sheet.html"
+
+    def _build_context(self):
+        """Gather the sheet rows, openings and the day's recorded totals."""
+        shop = self.shop
+        today = timezone.localdate()
+
+        price_card = list(
+            ShopProduct.objects.filter(
+                shop=shop, is_active=True, cost_price__gt=0
+            )
+            .select_related("product")
+            .order_by("product__name", "product__category")
+        )
+
+        # Follow the owner's price-list row order (250ml ... soda). Products
+        # missing from the file sort alphabetically after the listed ones.
+        rank = price_list_rank()
+        price_card.sort(
+            key=lambda card: (
+                rank.get((card.product.name, card.product.category), len(rank)),
+                card.product.name,
+                card.product.category,
+            )
+        )
+
+        # Today's saved stock rows, used to pre-fill the inputs.
+        today_entries = {
+            sale.product_id: sale
+            for sale in DailySale.objects.filter(
+                shop=shop, sale_date=today, total_stock__isnull=False
+            )
         }
 
-    return render(request, 'tracker/daily_sales.html', {
-        'shop': shop,
-        'sale_date': sale_date,
-        'date_is_today': sale_date == date.today(),
-        'today_iso': date.today().strftime('%Y-%m-%d'),
-        'categories_data': categories_data,
-        'saved': saved,
-        'deleted': request.GET.get('deleted') == '1',
-        'edited': request.GET.get('edited') == '1',
-        'sales_categories': SALES_CATEGORIES,
-        'manual_categories': manual_categories,
-        'total_expenses': total_expenses,
-        'sales_profit': sales_profit,
-        'net_profit': net_profit,
-        'day_sales_val': _prefill(day_totals.total_sales) if day_totals else '',
-        'day_profit_val': _prefill(day_totals.total_profit) if day_totals else '',
-        'day_exp_val': _prefill(day_totals.total_expenditure) if day_totals else '',
-        'branch_totals': branch_totals,
-    })
-
-def daily_sales_export(request):
-    shop = request.session.get('daily_sales_shop', '')
-    sale_date = _parse_date(request.GET.get('date')) or date.today()
-    sales = DailySale.objects.filter(shop=shop, date=sale_date).select_related('product')
-    rows = [{
-        'Shop': s.shop or 'Unassigned',
-        'Product': s.product.product_name,
-        'Category': s.product.category,
-        'Selling Price': float(s.sell_price),
-        'Amount Sold': s.quantity_sold,
-        'Profit': float(s.profit),
-        'Date': s.date,
-    } for s in sales]
-    if rows:
-        total_units = sum((r['Amount Sold'] for r in rows), Decimal('0.00'))
-        total_profit = sum((r['Profit'] for r in rows), 0.0)
-        dt = DayTotals.objects.filter(shop=shop, date=sale_date).first()
-        expenses = dt.total_expenditure if dt else Decimal('0.00')
-        net_profit = total_profit - float(expenses)
-        rows.append({
-            'Shop': '',
-            'Product': 'TOTAL',
-            'Category': '',
-            'Selling Price': None,
-            'Amount Sold': total_units,
-            'Profit': total_profit,
-            'Date': '',
-        })
-        rows.append({
-            'Shop': '',
-            'Product': 'EXPENSES',
-            'Category': '',
-            'Selling Price': None,
-            'Amount Sold': None,
-            'Profit': -float(expenses),
-            'Date': '',
-        })
-        rows.append({
-            'Shop': '',
-            'Product': 'NET PROFIT',
-            'Category': '',
-            'Selling Price': None,
-            'Amount Sold': None,
-            'Profit': net_profit,
-            'Date': '',
-        })
-    else:
-        rows = [{'Shop': None, 'Product': None, 'Category': None, 'Selling Price': None, 'Amount Sold': None, 'Profit': None, 'Date': None}]
-    df = pd.DataFrame(rows)
-    buffer = BytesIO()
-    df.to_excel(buffer, index=False, sheet_name='Daily Sales')
-    buffer.seek(0)
-    response = HttpResponse(
-        buffer.read(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    safe_shop = (shop or 'Unassigned').replace(' ', '_')
-    response['Content-Disposition'] = f'attachment; filename="daily_sales_{safe_shop}_{sale_date}.xlsx"'
-    return response
-
-def _safe_sheet_name(name):
-    """Excel tab names: max 31 chars, none of : \\ / ? * [ ]."""
-    cleaned = re.sub(r'[:\\/?*\[\]]', ' ', str(name)).strip()
-    return (cleaned or 'Sheet')[:31]
-
-
-def _day_export_response(sale_date, segments, summary_sheet, filename):
-    """Build a day workbook: one tab per segment (its products +
-    TOTAL/EXPENSES/NET rows) plus a summary tab, returned as a download.
-    """
-    columns = ['Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit']
-    summary_rows = []
-    grand_units = Decimal('0.00')
-    grand_profit = 0.0
-    grand_expenses = 0.0
-
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        for name, qs, exp_val in segments:
-            rows = [{
-                'Product': s.product.product_name,
-                'Category': s.product.category,
-                'Selling Price': float(s.sell_price),
-                'Amount Sold': s.quantity_sold,
-                'Profit': float(s.profit),
-            } for s in qs.order_by('product__product_name')]
-
-            units = sum((r['Amount Sold'] for r in rows), Decimal('0.00'))
-            profit = sum((r['Profit'] for r in rows), 0.0)
-            expenses = float(exp_val)
-            net = profit - expenses
-
-            grand_units += units
-            grand_profit += profit
-            grand_expenses += expenses
-            summary_rows.append({
-                'Shop': name,
-                'Amount Sold': units,
-                'Profit': profit,
-                'Expenses': expenses,
-                'Net Profit': net,
-            })
-
-            rows.append({'Product': 'TOTAL', 'Category': '', 'Selling Price': None, 'Amount Sold': units, 'Profit': profit})
-            rows.append({'Product': 'EXPENSES', 'Category': '', 'Selling Price': None, 'Amount Sold': None, 'Profit': -expenses})
-            rows.append({'Product': 'NET PROFIT', 'Category': '', 'Selling Price': None, 'Amount Sold': None, 'Profit': net})
-
-            df = pd.DataFrame(rows, columns=columns)
-            df.to_excel(writer, index=False, sheet_name=_safe_sheet_name(name))
-
-        summary_rows.append({
-            'Shop': 'GRAND TOTAL',
-            'Amount Sold': grand_units,
-            'Profit': grand_profit,
-            'Expenses': grand_expenses,
-            'Net Profit': grand_profit - grand_expenses,
-        })
-        summary_df = pd.DataFrame(
-            summary_rows,
-            columns=['Shop', 'Amount Sold', 'Profit', 'Expenses', 'Net Profit'],
+        # Opening stock = the latest closing stock before today, per product.
+        openings = {}
+        previous = (
+            DailySale.objects.filter(
+                shop=shop, sale_date__lt=today, closing_stock__isnull=False
+            )
+            .order_by("product_id", "-sale_date", "-id")
         )
-        summary_df.to_excel(writer, index=False, sheet_name=_safe_sheet_name(summary_sheet))
+        for sale in previous:
+            openings.setdefault(sale.product_id, sale.closing_stock)
 
-    buffer.seek(0)
-    response = HttpResponse(
-        buffer.read(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    return response
+        rows = []
+        for card in price_card:
+            entry = today_entries.get(card.product_id)
+            rows.append(
+                {
+                    "product": card.product,
+                    "cost": card.cost_price,
+                    "price": card.selling_price,
+                    "opening": openings.get(card.product_id, Decimal("0.00")),
+                    "entry": entry,
+                    "additional_input": _input_value(
+                        entry.additional_stock if entry else None
+                    ),
+                    "total_input": _input_value(entry.total_stock if entry else None),
+                    "closing_input": _input_value(
+                        entry.closing_stock if entry else None
+                    ),
+                    "sold": entry.units_sold if entry else None,
+                    "amount": entry.total_revenue if entry else None,
+                }
+            )
 
-
-def _day_segments_for(shops, sale_date):
-    """Segments (tab label, sales, expenses) for the given shops, plus an
-    'Unassigned' segment for rows whose shop is outside every known shop.
-    """
-    all_sales = DailySale.objects.filter(date=sale_date).select_related('product')
-    day_exp = {dt.shop: dt.total_expenditure for dt in DayTotals.objects.filter(date=sale_date)}
-    segments = [
-        (name, all_sales.filter(shop=name), day_exp.get(name, Decimal('0.00')))
-        for name in shops
-    ]
-    unassigned = all_sales.exclude(shop__in=SHOPS)
-    if unassigned.exists():
-        unassigned_exp = sum(
-            (v for k, v in day_exp.items() if k not in SHOPS), Decimal('0.00')
+        day = DailySale.objects.filter(shop=shop, sale_date=today).aggregate(
+            revenue=Sum("total_revenue"),
+            cost=Sum("total_cost"),
+            profit=Sum("profit"),
+            units=Sum("units_sold"),
         )
-        segments.append(('Unassigned', unassigned, unassigned_exp))
-    return segments
 
+        return {
+            "shop": shop,
+            "today": today,
+            "openings": openings,
+            "rows": rows,
+            "has_products": bool(rows),
+            "day_revenue": _money(day["revenue"]),
+            "day_cost": _money(day["cost"]),
+            "day_profit": _money(day["profit"]),
+            "day_units": _money(day["units"]),
+            "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
+        }
 
-def daily_sales_day_export(request):
-    """Export the four original shops' sales for a single day into one
-    workbook: one tab per shop (its products + TOTAL/EXPENSES/NET) plus an
-    'All Shops' summary tab. Chambers Point is excluded — it has its own
-    download (daily_sales_chambers_export).
-    """
-    sale_date = _parse_date(request.GET.get('date')) or date.today()
-    return _day_export_response(
-        sale_date,
-        _day_segments_for(ALL_SHOPS_EXPORT, sale_date),
-        'All Shops',
-        f'all_shops_{sale_date}.xlsx',
-    )
+    def get(self, request, *args, **kwargs):
+        """Render the sheet, pre-filled with what has already been recorded."""
+        return self.render_to_response(self._build_context())
 
-
-def daily_sales_chambers_export(request):
-    """Chambers Point's own day download: its products with TOTAL/EXPENSES/NET
-    rows plus a Chambers Point summary tab, kept separate from the combined
-    'All Shops' workbook.
-    """
-    sale_date = _parse_date(request.GET.get('date')) or date.today()
-    all_sales = DailySale.objects.filter(
-        date=sale_date, shop=CHAMBERS_SHOP
-    ).select_related('product')
-    day_exp = DayTotals.objects.filter(
-        date=sale_date, shop=CHAMBERS_SHOP
-    ).first()
-    segments = [(
-        CHAMBERS_SHOP,
-        all_sales,
-        day_exp.total_expenditure if day_exp else Decimal('0.00'),
-    )]
-    return _day_export_response(
-        sale_date,
-        segments,
-        'Chambers Summary',
-        f'chambers_point_{sale_date}.xlsx',
-    )
-
-def _strict_date(value):
-    try:
-        return datetime.strptime(str(value), '%Y-%m-%d').date()
-    except (ValueError, TypeError):
-        return None
-
-
-def _iso_month(value):
-    """Return a (year, month) tuple from 'YYYY-MM' or None."""
-    try:
-        return int(str(value)[:4]), int(str(value)[5:7])
-    except (ValueError, IndexError):
-        return None
-
-
-def _month_bounds(value):
-    ym = _iso_month(value)
-    if not ym or not (1 <= ym[1] <= 12):
-        return None
-    y, m = ym
-    first = date(y, m, 1)
-    if m == 12:
-        last = date(y + 1, 1, 1)
-    else:
-        last = date(y, m + 1, 1)
-    return first, last - timedelta(days=1)
-
-
-def _report_period(request):
-    """Return (start, end, label) for the report based on request params.
-
-    Priority: explicit start+end range > month > single date > today.
-    """
-    today = date.today()
-    start = _strict_date(request.GET.get('start'))
-    end = _strict_date(request.GET.get('end'))
-    if start and end:
-        if end >= start:
-            return start, end, f"{start} → {end}"
-
-    bounds = _month_bounds(request.GET.get('month'))
-    if bounds:
-        return bounds[0], bounds[1], bounds[0].strftime('%B %Y')
-
-    day = _strict_date(request.GET.get('date'))
-    if day:
-        return day, day, str(day)
-
-    return today, today, str(today)
-
-
-def _report_series(sale_by_date, exp_by_date, start, end):
-    """Build chart series (labels, profits, expenses, nets).
-
-    Daily for ranges up to 62 days, otherwise bucketed weekly.
-    """
-    labels, profits, expenses = [], [], []
-    if (end - start).days <= 62:
-        cur = start
-        while cur <= end:
-            sp = float(sale_by_date.get(cur, 0))
-            ex = float(exp_by_date.get(cur, 0))
-            labels.append(cur.strftime('%d %b'))
-            profits.append(sp)
-            expenses.append(ex)
-            cur += timedelta(days=1)
-    else:
-        buckets = {}
-        order = []
-        cur = start
-        while cur <= end:
-            wk = cur.isocalendar()[:2]
-            if wk not in buckets:
-                buckets[wk] = {'sp': 0.0, 'ex': 0.0, 'label': cur.strftime('%d %b')}
-                order.append(wk)
-            buckets[wk]['sp'] += float(sale_by_date.get(cur, 0))
-            buckets[wk]['ex'] += float(exp_by_date.get(cur, 0))
-            cur += timedelta(days=1)
-        for wk in order:
-            b = buckets[wk]
-            labels.append(b['label'])
-            profits.append(b['sp'])
-            expenses.append(b['ex'])
-    nets = [p - e for p, e in zip(profits, expenses)]
-    return labels, profits, expenses, nets
-
-
-def daily_sales_report(request):
-    start, end, period_label = _report_period(request)
-    sales = (
-        DailySale.objects.filter(date__gte=start, date__lte=end)
-        .select_related('product').order_by('shop', 'product__product_name')
-    )
-    expense_qs = DayTotals.objects.filter(date__gte=start, date__lte=end)
-
-    shops_data = []
-    grand_profit = grand_units = grand_expenses = grand_net = Decimal('0.00')
-    for name in SHOPS:
-        qs = sales.filter(shop=name)
-        profit = qs.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
-        units = qs.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
-        expenses = (
-            expense_qs.filter(shop=name).aggregate(Sum('total_expenditure'))['total_expenditure__sum']
-            or Decimal('0.00')
+    def post(self, request, *args, **kwargs):
+        """Save every filled-in stock row, then show the day's running totals."""
+        context = self._build_context()
+        form = DailySalesSheetForm(
+            request.POST,
+            shop=self.shop,
+            openings=context["openings"],
+            day=context["today"],
         )
-        net = profit - expenses
-        product_rows = list(
-            qs.values('product__product_name', 'product__category')
-            .annotate(qty=Sum('quantity_sold'), profit=Sum('profit'))
-            .order_by('product__product_name')
+        if not form.is_valid():
+            # Keep whatever the user typed so a rejected row can be fixed in place.
+            for row in context["rows"]:
+                key = row["product"].pk
+                for name, prefix in (
+                    ("additional_input", DailySalesSheetForm.ADDITIONAL_PREFIX),
+                    ("total_input", DailySalesSheetForm.TOTAL_PREFIX),
+                    ("closing_input", DailySalesSheetForm.CLOSING_PREFIX),
+                ):
+                    raw = request.POST.get(f"{prefix}{key}")
+                    if raw is not None and str(raw).strip() != "":
+                        row[name] = raw
+            context["form_errors"] = form.non_field_errors()
+            context["form_warnings"] = form.warnings
+            return self.render_to_response(context, status=400)
+
+        sales = form.save(request.user)
+        for warning in form.warnings:
+            messages.warning(request, warning)
+
+        if not sales:
+            messages.warning(
+                request,
+                "Nothing was entered. Fill in additional stock, total stock and "
+                "closing stock for the products that changed, or leave a row blank.",
+            )
+            return redirect("daily_sales_sheet")
+
+        units = sum((s.units_sold for s in sales), Decimal("0.00"))
+        amount = sum((s.total_revenue for s in sales), Decimal("0.00"))
+        # Profit is deliberately left out of the sheet and this flash: it is a
+        # dashboard figure, shown to the manager on their dashboard.
+        messages.success(
+            request,
+            f"Saved {len(sales)} product(s): {units.normalize():f} unit(s) sold, "
+            f"amount {CURRENCY} {amount:,.2f}.",
         )
-        grand_profit += profit
-        grand_units += units
-        grand_expenses += expenses
-        grand_net += net
-        shops_data.append({
-            'name': name,
-            'product_rows': product_rows,
-            'profit': profit,
-            'expenses': expenses,
-            'net_profit': net,
-            'units': units,
-        })
+        return redirect("daily_sales_sheet")
 
-    unassigned = sales.exclude(shop__in=SHOPS)
-    if unassigned.exists():
-        up = unassigned.aggregate(Sum('profit'))['profit__sum'] or Decimal('0.00')
-        uu = unassigned.aggregate(Sum('quantity_sold'))['quantity_sold__sum'] or Decimal('0.00')
-        ue = (
-            expense_qs.exclude(shop__in=SHOPS).aggregate(Sum('total_expenditure'))['total_expenditure__sum']
-            or Decimal('0.00')
-        )
-        product_rows = list(
-            unassigned.values('product__product_name', 'product__category')
-            .annotate(qty=Sum('quantity_sold'), profit=Sum('profit'))
-            .order_by('product__product_name')
-        )
-        grand_profit += up
-        grand_units += uu
-        grand_expenses += ue
-        grand_net += (up - ue)
-        shops_data.append({
-            'name': 'Unassigned',
-            'product_rows': product_rows,
-            'profit': up,
-            'expenses': ue,
-            'net_profit': up - ue,
-            'units': uu,
-        })
 
-    # Per-day-per-product-per-shop profit breakdown – a list of
-    # [shop, product_name, date_iso, profit] rows, JSON-serialised verbatim.
-    product_profit_by_day = []
-    for r in (
-        sales.values('shop', 'product__product_name', 'date')
-        .annotate(profit=Sum('profit'), qty=Sum('quantity_sold'))
-        .order_by('shop', 'product__product_name', 'date')
-    ):
-        product_profit_by_day.append([
-            r['shop'] or 'Unassigned',
-            r['product__product_name'],
-            r['date'].isoformat(),
-            float(r['profit'] or 0),
-            float(r['qty'] or 0),
-        ])
-    # Daily labels for the time-series chart
-    sale_by_date = {
-        r['date']: r['subtotal']
-        for r in sales.values('date').annotate(subtotal=Sum('profit')).order_by('date')
-    }
-    exp_by_date = {
-        r['date']: r['subtotal']
-        for r in expense_qs.values('date').annotate(subtotal=Sum('total_expenditure')).order_by('date')
-    }
-    labels, profits, expenses, nets = _report_series(sale_by_date, exp_by_date, start, end)
-    chart = {
-        'labels': labels,
-        'profits': profits,
-        'expenses': expenses,
-        'nets': nets,
-        'shops': [s['name'] for s in shops_data],
-        'shop_nets': [float(s['net_profit']) for s in shops_data],
-    }
+class ShopPricingView(OwnerRequiredMixin, View):
+    """Owner-only inline editor for every shop's price card.
 
-    return render(request, 'tracker/daily_sales_report.html', {
-        'shops_data': shops_data,
-        'grand_profit': grand_profit,
-        'grand_units': grand_units,
-        'grand_expenses': grand_expenses,
-        'grand_net': grand_net,
-        'period_label': period_label,
-        'start': start,
-        'end': end,
-        'month_value': end.strftime('%Y-%m'),
-        'today_iso': date.today().strftime('%Y-%m-%d'),
-        'month_first': date.today().replace(day=1).strftime('%Y-%m-%d'),
-        'current_month': date.today().strftime('%Y-%m'),
-        'chart': chart,
-        'product_profit_by_day': product_profit_by_day,
-    })
-
-def daily_sales_report_export(request):
-    """Excel for the report period, with Chambers Point kept separate.
-
-    ``?shop=chambers`` downloads Chambers Point on its own; the default
-    download is every other shop, so the combined workbook never mixes the
-    two (same split the day export already uses).
+    ``GET`` renders all :class:`ShopProduct` rows grouped by shop. ``POST``
+    accepts ``shop_product-<pk>-<field>`` inputs and updates each row, so the
+    owner can correct many prices in a single submit.
     """
-    chambers_only = request.GET.get('shop') == 'chambers'
-    start, end, period_label = _report_period(request)
-    sales = (
-        DailySale.objects.filter(date__gte=start, date__lte=end)
-        .select_related('product').order_by('shop', 'product__product_name')
-    )
-    if chambers_only:
-        sales = sales.filter(shop=CHAMBERS_SHOP)
-    else:
-        sales = sales.exclude(shop=CHAMBERS_SHOP)
-    columns = ['Shop', 'Product', 'Category', 'Selling Price', 'Amount Sold', 'Profit', 'Date']
-    rows = [{
-        'Shop': s.shop or 'Unassigned',
-        'Product': s.product.product_name,
-        'Category': s.product.category,
-        'Selling Price': float(s.sell_price),
-        'Amount Sold': s.quantity_sold,
-        'Profit': float(s.profit),
-        'Date': s.date,
-    } for s in sales]
-    if rows:
-        grand_units = Decimal('0.00')
-        grand_profit = 0.0
-        grand_expenses = 0.0
-        expense_rows = (
-            DayTotals.objects.filter(date__gte=start, date__lte=end)
-            .values('shop').annotate(total=Sum('total_expenditure'))
-        )
-        expenses_by_shop = {r['shop'] or 'Unassigned': r['total'] for r in expense_rows}
+
+    template_name = "tracker/shop_pricing.html"
+
+    def get(self, request, *args, **kwargs):
+        """Render the price editor with all rows grouped by shop."""
         grouped = {}
-        for r in rows:
-            grouped.setdefault(r['Shop'] or 'Unassigned', []).append(r)
-        for name in list(SHOPS) + [k for k in grouped if k not in SHOPS]:
-            sub = grouped.get(name)
-            if not sub:
+        shop_products = ShopProduct.objects.select_related("shop", "product").order_by(
+            "shop__name", "product__name"
+        )
+        for sp in shop_products:
+            grouped.setdefault(sp.shop, []).append(sp)
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "grouped_products": grouped,
+                "shops": Shop.objects.all(),
+            },
+        )
+
+    def post(self, request, *args, **kwargs):
+        """Apply the submitted prices, then redirect back with a summary."""
+        updates = 0
+        for sp in ShopProduct.objects.select_related("shop", "product").all():
+            prefix = f"shop_product-{sp.pk}-"
+            cost_raw = request.POST.get(prefix + "cost_price")
+            sell_raw = request.POST.get(prefix + "selling_price")
+            if cost_raw is None and sell_raw is None:
                 continue
-            units = sum((r['Amount Sold'] for r in sub), Decimal('0.00'))
-            profit = sum((r['Profit'] for r in sub), 0.0)
-            expenses = float(expenses_by_shop.get(name, Decimal('0.00')))
-            net = profit - expenses
-            grand_units += units
-            grand_profit += profit
-            grand_expenses += expenses
-            rows.append({
-                'Shop': name,
-                'Product': 'TOTAL - ' + name,
-                'Category': '',
-                'Selling Price': None,
-                'Amount Sold': units,
-                'Profit': profit,
-                'Date': '',
-            })
-            rows.append({
-                'Shop': name,
-                'Product': 'EXPENSES - ' + name,
-                'Category': '',
-                'Selling Price': None,
-                'Amount Sold': None,
-                'Profit': -expenses,
-                'Date': '',
-            })
-            rows.append({
-                'Shop': name,
-                'Product': 'NET PROFIT - ' + name,
-                'Category': '',
-                'Selling Price': None,
-                'Amount Sold': None,
-                'Profit': net,
-                'Date': '',
-            })
-        rows.append({
-            'Shop': 'CHAMBERS POINT' if chambers_only else 'ALL SHOPS',
-            'Product': 'GRAND NET PROFIT',
-            'Category': '',
-            'Selling Price': None,
-            'Amount Sold': grand_units,
-            'Profit': grand_profit - grand_expenses,
-            'Date': '',
-        })
-    else:
-        rows = [{k: None for k in columns}]
-    df = pd.DataFrame(rows, columns=columns)
-    buffer = BytesIO()
-    df.to_excel(buffer, index=False, sheet_name=f'Report {period_label}')
-    buffer.seek(0)
-    response = HttpResponse(
-        buffer.read(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    safe = period_label.replace('/', '-').replace(' ', '_').replace('→', 'to')
-    prefix = 'chambers_report_' if chambers_only else 'report_'
-    response['Content-Disposition'] = f'attachment; filename="{prefix}{safe}.xlsx"'
-    return response
+
+            cost = ShopPricingForm.to_decimal(cost_raw)
+            sell = ShopPricingForm.to_decimal(sell_raw)
+            active = request.POST.get(prefix + "is_active") == "on"
+
+            problems = []
+            if cost is None or cost < Decimal("0.00"):
+                problems.append(f"{sp.product} @ {sp.shop.name}: invalid cost price.")
+            if sell is None or sell < Decimal("0.00"):
+                problems.append(f"{sp.product} @ {sp.shop.name}: invalid selling price.")
+            if problems:
+                for problem in problems:
+                    messages.error(request, problem)
+                continue
+
+            sp.cost_price = cost.quantize(Decimal("0.01"))
+            sp.selling_price = sell.quantize(Decimal("0.01"))
+            sp.is_active = active
+            sp.save(update_fields=["cost_price", "selling_price", "is_active"])
+            updates += 1
+
+        if updates:
+            messages.success(request, f"Saved prices for {updates} product(s).")
+        else:
+            messages.warning(request, "No price changes were submitted.")
+        return redirect(reverse("shop_pricing"))
 
 
-def dashboard_export(request):
-    """Export shop NET profits (after expenses) by date range to Excel."""
-    today = date.today()
-    range_start = _strict_date(request.GET.get('range_start')) or today
-    range_end = _strict_date(request.GET.get('range_end')) or today
-    if range_end < range_start:
-        range_start, range_end = range_end, range_start
+class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
+    """Return the cost/selling price of a product for the requesting shop.
 
-    only_chambers = (request.GET.get('shop') or '').strip().lower() in {
-        'chambers', 'chambers point', 'chambers_point'
-    }
-    export_shops = [CHAMBERS_SHOP] if only_chambers else ALL_SHOPS_EXPORT
-
-    sales = DailySale.objects.filter(date__gte=range_start, date__lte=range_end)
-
-    # Aggregate profit by date and shop
-    shop_daily = (
-        sales.values('date', 'shop')
-        .annotate(total_profit=Sum('profit'))
-        .order_by('date', 'shop')
-    )
-    profit_map = {}
-    for row in shop_daily:
-        d = row['date']
-        if d not in profit_map:
-            profit_map[d] = {}
-        profit_map[d][row['shop']] = float(row['total_profit'])
-
-    # Aggregate expenses by date and shop (from DayTotals)
-    exp_map = {}
-    day_exp = DayTotals.objects.filter(date__gte=range_start, date__lte=range_end)
-    for r in day_exp.values('date', 'shop', 'total_expenditure'):
-        d = r['date']
-        if d not in exp_map:
-            exp_map[d] = {}
-        exp_map[d][r['shop']] = float(r['total_expenditure'])
-
-    # Build rows: each value is NET profit (profit minus expenses)
-    columns = ['Date'] + export_shops + ['Day Total (Net)']
-    rows = []
-    totals = {s: 0.0 for s in export_shops}
-    grand_total = 0.0
-    grand_expenses = 0.0
-
-    cur = range_start
-    while cur <= range_end:
-        row_data = {'Date': cur}
-        day_total = 0.0
-        for s in export_shops:
-            val = profit_map.get(cur, {}).get(s, 0.0)
-            exp = exp_map.get(cur, {}).get(s, 0.0)
-            net = val - exp
-            grand_expenses += exp
-            row_data[s] = net
-            totals[s] += net
-            day_total += net
-        row_data['Day Total (Net)'] = day_total
-        grand_total += day_total
-        rows.append(row_data)
-        cur += timedelta(days=1)
-
-    # Add totals row
-    total_row = {'Date': 'TOTAL NET PROFIT'}
-    for s in export_shops:
-        total_row[s] = totals[s]
-    total_row['Day Total (Net)'] = grand_total
-    rows.append(total_row)
-
-    # Add expenses row for context
-    exp_totals = {s: 0.0 for s in export_shops}
-    for d, shops in exp_map.items():
-        for s in export_shops:
-            exp_totals[s] += shops.get(s, 0.0)
-    exp_row = {'Date': 'TOTAL EXPENSES'}
-    for s in export_shops:
-        exp_row[s] = exp_totals[s]
-    exp_row['Day Total (Net)'] = grand_expenses
-    rows.append(exp_row)
-
-    df = pd.DataFrame(rows, columns=columns)
-    buffer = BytesIO()
-    df.to_excel(buffer, index=False, sheet_name='Net Shop Profits')
-    buffer.seek(0)
-    response = HttpResponse(
-        buffer.read(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    )
-    safe_range = f"{range_start}_to_{range_end}"
-    shop_slug = 'chambers_point' if only_chambers else 'all_other_shops'
-    response['Content-Disposition'] = (
-        f'attachment; filename="net_shop_profits_{shop_slug}_{safe_range}.xlsx"'
-    )
-    return response
-
-
-# ---------------------------------------------------------------------------
-# Admin: shadcn-styled shop sheets (/admin/shops/<shop>/)
-# ---------------------------------------------------------------------------
-
-def _shop_sheet_dates(shop):
-    """Every date this shop has a sheet for, newest first, with its net.
-
-    Drives the sheet chips and the prev/next navigation: a sheet exists when
-    the shop has sales rows or manually-typed day totals for that date.
+    Used by ``daily_sale_form.html`` to live-preview profit in the browser.
+    The lookup is scoped to the manager's own shop, so it can only ever
+    disclose prices the manager is already entitled to see.
     """
-    profit_by_date = dict(
-        DailySale.objects.filter(shop=shop)
-        .values('date')
-        .annotate(v=Sum('profit'))
-        .values_list('date', 'v')
-    )
-    expense_by_date = dict(
-        DayTotals.objects.filter(shop=shop).values_list('date', 'total_expenditure')
-    )
-    sheets = []
-    for d in sorted(set(profit_by_date) | set(expense_by_date), reverse=True):
-        profit = profit_by_date.get(d) or Decimal('0.00')
-        expenses = expense_by_date.get(d) or Decimal('0.00')
-        sheets.append({'date': d, 'profit': profit, 'expenses': expenses,
-                       'net': profit - expenses})
-    return sheets
 
-
-@staff_member_required
-def admin_shop_sheet(request, shop):
-    """One shop's Excel-style sheet for a single day: view, add and delete rows."""
-    if shop not in SHOPS:
-        raise Http404('Unknown shop')
-
-    def _back(target):
-        return f"{reverse('admin_shop_sheet', args=[shop])}?date={target.isoformat()}"
-
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        sheet_date = _parse_date(request.POST.get('date'))
-
-        if action == 'add':
-            qty = _parse_decimal(request.POST.get('qty'))
-            try:
-                product = Product.objects.get(pk=int(request.POST.get('product') or 0))
-            except (Product.DoesNotExist, ValueError, TypeError):
-                product = None
-            if product is None or qty is None or qty <= 0:
-                messages.error(request, 'Pick a product and a quantity greater than zero.')
-            else:
-                sell = _parse_decimal(request.POST.get('sell'))
-                cost = _parse_decimal(request.POST.get('cost'))
-                if sell is None:
-                    sell = _shop_price_overrides(shop).get(product.pk, product.selling_price)
-                if cost is None:
-                    cost = _shop_cost_overrides(shop).get(product.pk, product.cost_price)
-                sale, created = DailySale.objects.get_or_create(
-                    product=product, shop=shop, date=sheet_date,
-                    defaults={'quantity_sold': qty, 'sell_price': sell,
-                              'cost_price': cost},
-                )
-                if not created:
-                    sale.quantity_sold = qty
-                    sale.sell_price = sell
-                    sale.cost_price = cost
-                    sale.save()
-                verb = 'Added' if created else 'Updated'
-                messages.success(
-                    request,
-                    f"{verb} {product.product_name} - {qty} units for {shop} "
-                    f"on {sheet_date:%d %b %Y}.",
-                )
-            return redirect(_back(sheet_date))
-
-        if action == 'delete':
-            sale = (DailySale.objects
-                    .filter(pk=request.POST.get('sale'), shop=shop)
-                    .select_related('product').first())
-            if sale is None:
-                messages.error(request, 'That row is already gone.')
-            else:
-                name = sale.product.product_name
-                sale.delete()
-                messages.success(
-                    request,
-                    f"Deleted {name} from {shop} on {sheet_date:%d %b %Y}.",
-                )
-            return redirect(_back(sheet_date))
-
-        if action == 'totals':
-            DayTotals.objects.update_or_create(
-                shop=shop, date=sheet_date,
-                defaults={
-                    'total_sales': _parse_decimal(request.POST.get('total_sales')) or Decimal('0.00'),
-                    'total_profit': _parse_decimal(request.POST.get('total_profit')) or Decimal('0.00'),
-                    'total_expenditure': _parse_decimal(request.POST.get('total_expenditure')) or Decimal('0.00'),
-                },
+    def get(self, request, product_id, *args, **kwargs):
+        """Return ``{cost_price, selling_price}`` as JSON."""
+        shop_product = (
+            ShopProduct.objects.filter(shop=self.shop, product_id=product_id)
+            .select_related("product")
+            .first()
+        )
+        if shop_product is None or not shop_product.is_active:
+            return JsonResponse(
+                {"error": "Product is not available for this shop."}, status=404
             )
-            messages.success(request, f"Day totals saved for {shop} on {sheet_date:%d %b %Y}.")
-            return redirect(_back(sheet_date))
 
-        return redirect(_back(sheet_date))
-
-    # ---- GET ------------------------------------------------------------
-    sheet_date = _parse_date(request.GET.get('date'))
-    sheets = _shop_sheet_dates(shop)
-    sheet_dates = [s['date'] for s in sheets]
-    prev_date = next((d for d in reversed(sheet_dates) if d < sheet_date), None)
-    next_date = next((d for d in sheet_dates if d > sheet_date), None)
-
-    rows = list(
-        DailySale.objects.filter(shop=shop, date=sheet_date)
-        .select_related('product')
-        .order_by('product__order', 'product__product_name')
-    )
-    total_units = sum((r.quantity_sold for r in rows), Decimal('0.00'))
-    total_sales_value = sum((r.sell_price * r.quantity_sold for r in rows), Decimal('0.00'))
-    total_profit = sum((r.profit for r in rows), Decimal('0.00'))
-    day_totals = DayTotals.objects.filter(shop=shop, date=sheet_date).first()
-    expenses = day_totals.total_expenditure if day_totals else Decimal('0.00')
-
-    def _money(value):
-        return f"{value:0.2f}" if value else ''
-
-    return render(request, 'tracker/admin_shop_sheet.html', {
-        'shop': shop,
-        'shops': SHOPS,
-        'sheet_date': sheet_date,
-        'sheet_date_iso': sheet_date.isoformat(),
-        'prev_date': prev_date,
-        'next_date': next_date,
-        'chips': sheets[:21],
-        'rows': rows,
-        'products': _sale_products(),
-        'total_units': total_units,
-        'total_sales_value': total_sales_value,
-        'total_profit': total_profit,
-        'expenses': expenses,
-        'net_profit': total_profit - expenses,
-        'form_sales': _money(day_totals.total_sales) if day_totals else '',
-        'form_profit': _money(day_totals.total_profit) if day_totals else '',
-        'form_expenses': _money(expenses),
-    })
+        return JsonResponse(
+            {
+                "product": str(shop_product.product),
+                "cost_price": str(shop_product.cost_price),
+                "selling_price": str(shop_product.selling_price),
+            }
+        )
 
 
-# ---------------------------------------------------------------------------
-# Dashboard analytics (daily / weekly / monthly graphs + pie charts)
-# ---------------------------------------------------------------------------
 
-def _build_analytics():
-    """Sales analytics payload consumed by the dashboard Chart.js charts.
+class ProductComparisonView(OwnerRequiredMixin, TemplateView):
+    """Product comparison across shops: profits, sales, and trends for selected products.
 
-    Three ranges (today, last 7 days, last 30 days), each with a per-product
-    bar chart, a share pie, a daily trend line for the top products, a
-    profit-by-shop pie and the KPI numbers shown next to the charts.
-    Data source is DailySale (per-item rows); audit Transactions are not
-    itemised by date in the same way, so they stay out of these graphs.
+    Allows the owner to select up to 5 products and compare their performance
+    across all shops, showing profit, units sold, revenue, and trends.
+    Includes CSV export functionality.
     """
-    today = date.today()
-    ranges = [
-        ('day', 'Today', today, today),
-        ('week', 'Last 7 days', today - timedelta(days=6), today),
-        ('month', 'Last 30 days', today - timedelta(days=29), today),
-    ]
-    payload = {}
-    for key, label, start, end in ranges:
-        sales = DailySale.objects.filter(date__gte=start, date__lte=end)
-        by_product = (
-            sales.values('product_id', 'product__product_name')
-            .annotate(units=Sum('quantity_sold'), profit=Sum('profit'))
-            .order_by('-units', 'product__product_name')
-        )
-        products = list(by_product[:12])
-        bar_labels = [p['product__product_name'] for p in products]
-        bar_values = [float(p['units'] or 0) for p in products]
 
-        pie_labels = bar_labels[:6]
-        pie_values = bar_values[:6]
-        if len(bar_values) > 6:
-            pie_labels = pie_labels + ['Other']
-            pie_values = pie_values + [round(sum(bar_values[6:]), 2)]
+    template_name = "tracker/product_comparison.html"
 
-        dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
-        line_datasets = []
-        for p in list(by_product[:5]):
-            series = dict(
-                sales.filter(product_id=p['product_id'])
-                .values('date')
-                .annotate(units=Sum('quantity_sold'))
-                .values_list('date', 'units')
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        today = timezone.localdate()
+        window_start = today - timedelta(days=OWNER_TREND_DAYS - 1)
+
+        # Get all shops and products
+        context["shops"] = Shop.objects.all().order_by("name")
+        context["products"] = MasterProduct.objects.all().order_by("name", "category")
+        context["selected_product_ids"] = []
+        context["comparison_data"] = []
+        context["trend_rows"] = []
+        context["today"] = today
+        context["max_products"] = 5
+
+        # Get product IDs from request (up to 5)
+        product_ids = self.request.GET.getlist("product_ids", [])
+        if product_ids:
+            # Limit to 5 products max
+            product_ids = product_ids[:5]
+            context["selected_product_ids"] = [int(pid) for pid in product_ids]
+
+            # Get daily sales for selected products across all shops
+            sales = DailySale.objects.filter(
+                product_id__in=product_ids
+            ).select_related("product", "shop")
+
+            # Per-shop per-product aggregation
+            product_shop_data = sales.values(
+                "product_id",
+                "product__name",
+                "product__category",
+                "shop__name",
+                "shop__location",
+            ).annotate(
+                profit=Sum("profit"),
+                units=Sum("units_sold"),
+                revenue=Sum("total_revenue"),
             )
-            line_datasets.append({
-                'label': p['product__product_name'],
-                'data': [float(series.get(d) or 0) for d in dates],
-            })
 
-        by_shop = (
-            sales.values('shop')
-            .annotate(profit=Sum('profit'))
-            .order_by('-profit')
-        )
-        agg = sales.aggregate(units=Sum('quantity_sold'), profit=Sum('profit'),
-                              rows=Count('id'))
-        expenses = (
-            DayTotals.objects.filter(date__gte=start, date__lte=end)
-            .aggregate(v=Sum('total_expenditure'))['v'] or Decimal('0.00')
-        )
-        profit = agg['profit'] or Decimal('0.00')
+            # Build comparison data structured by product
+            products_data = {}
+            for row in product_shop_data:
+                pid = row["product_id"]
+                if pid not in products_data:
+                    products_data[pid] = {
+                        "product_id": pid,
+                        "product_name": row["product__name"],
+                        "product_category": row["product__category"],
+                        "shops": {},
+                    }
+                products_data[pid]["shops"][row["shop_id"]] = {
+                    "shop_name": row["shop__name"],
+                    "shop_location": row["shop__location"],
+                    "profit": _money(row["profit"]),
+                    "units": _money(row["units"]),
+                    "revenue": _money(row["revenue"]),
+                }
 
-        # Busiest date in the range ("when" things move within the period).
-        per_date = dict(
-            sales.values('date').annotate(u=Sum('quantity_sold'))
-            .values_list('date', 'u')
+            # Build trend data (last 7 days per product)
+            trend_data = sales.filter(sale_date__gte=window_start).values(
+                "product_id", "shop_id", "sale_date"
+            ).annotate(
+                profit=Sum("profit"),
+                units=Sum("units_sold"),
+            )
+
+            # Organize trend by product and day
+            product_trends = {}
+            for row in trend_data:
+                pid = row["product_id"]
+                if pid not in product_trends:
+                    product_trends[pid] = {}
+                date = row["sale_date"]
+                if date not in product_trends[pid]:
+                    product_trends[pid][date] = {}
+                product_trends[pid][date][row["shop_id"]] = {
+                    "profit": _money(row["profit"]),
+                    "units": _money(row["units"]),
+                }
+
+            # Build trend rows for template
+            days = [window_start + timedelta(days=i) for i in range(OWNER_TREND_DAYS)]
+            for pid in products_data:
+                product = products_data[pid]
+                product["trend_data"] = []
+                for day in days:
+                    day_cells_profit = []
+                    day_cells_units = []
+                    for shop in context["shops"]:
+                        day_data = product_trends.get(pid, {}).get(day, {}).get(shop.pk, {})
+                        day_cells_profit.append(day_data.get("profit", Decimal("0.00")))
+                        day_cells_units.append(day_data.get("units", Decimal("0.00")))
+                    product["trend_data"].append(
+                        {
+                            "date": day,
+                            "profit_cells": day_cells_profit,
+                            "units_cells": day_cells_units,
+                            "profit_total": sum(day_cells_profit, Decimal("0.00")),
+                            "units_total": sum(day_cells_units, Decimal("0.00")),
+                        }
+                    )
+                product["total_profit"] = sum(
+                    p["trend_data"][i]["profit_total"] for i in range(len(product["trend_data"]))
+                )
+                product["total_units"] = sum(
+                    p["trend_data"][i]["units_total"] for i in range(len(product["trend_data"]))
+                )
+                product["avg_profit_per_shop"] = (
+                    product["total_profit"] / len(context["shops"])
+                    if context["shops"]
+                    else Decimal("0.00")
+                )
+
+            context["comparison_data"] = list(products_data.values())
+
+        # CSV export URL
+        if context["selected_product_ids"]:
+            context["csv_export_url"] = reverse(
+                "product_comparison_csv",
+                args=context["selected_product_ids"],
+            )
+        else:
+            context["csv_export_url"] = ""
+
+        return context
+
+    def get_csv_response(self, product_ids):
+        """Generate a CSV file for the selected products comparison."""
+        import csv
+        from io import StringIO
+
+        from django.http import HttpResponse
+
+        # Get daily sales for selected products across all shops
+        sales = DailySale.objects.filter(
+            product_id__in=product_ids
+        ).select_related("product", "shop")
+
+        # Build data structured by product and shop
+        output = StringIO()
+        writer = None
+
+        # Header row
+        shops = list(Shop.objects.all().order_by("name"))
+        headers = ["Product", "Category"] + [shop.name for shop in shops] + ["Total Profit", "Total Units", "Total Revenue"]
+        writer = csv.writer(output)
+        writer.writerow(headers)
+
+        # Per-shop per-product aggregation
+        product_shop_data = sales.values(
+            "product_id",
+            "product__name",
+            "product__category",
+            "shop__name",
+            "shop__location",
+        ).annotate(
+            profit=Sum("profit"),
+            units=Sum("units_sold"),
+            revenue=Sum("total_revenue"),
         )
-        peak = None
-        if per_date:
-            peak_date = max(per_date, key=lambda d: per_date[d] or 0)
-            peak = {
-                'date': peak_date.isoformat(),
-                'label': peak_date.strftime('%a, %d %b'),
-                'units': float(per_date[peak_date] or 0),
+
+        # Organize by product
+        products_data = {}
+        for row in product_shop_data:
+            pid = row["product_id"]
+            if pid not in products_data:
+                products_data[pid] = {
+                    "product_name": row["product__name"],
+                    "product_category": row["product__category"],
+                    "shops": {},
+                }
+            products_data[pid]["shops"][row["shop_id"]] = {
+                "shop_name": row["shop__name"],
+                "profit": _money(row["profit"]),
+                "units": _money(row["units"]),
+                "revenue": _money(row["revenue"]),
             }
 
-        payload[key] = {
-            'peak': peak,
-            'label': label,
-            'start': start.isoformat(),
-            'end': end.isoformat(),
-            'units': float(agg['units'] or 0),
-            'profit': float(profit),
-            'expenses': float(expenses),
-            'net': float(profit - expenses),
-            'rows': agg['rows'] or 0,
-            'active_days': sales.values('date').distinct().count(),
-            'top': [{'name': p['product__product_name'],
-                     'units': float(p['units'] or 0),
-                     'profit': float(p['profit'] or 0)} for p in products[:8]],
-            'bar': {'labels': bar_labels, 'values': bar_values},
-            'pie': {'labels': pie_labels, 'values': pie_values},
-            'line': {
-                'labels': [d.strftime('%d %b') for d in dates],
-                'datasets': line_datasets,
-            },
-            'shops': {
-                'labels': [r['shop'] or 'Unassigned' for r in by_shop],
-                'values': [float(r['profit'] or 0) for r in by_shop],
-            },
-        }
+        # Write rows per product
+        for pid, product in products_data.items():
+            row = [product["product_name"], product["product_category"]]
+            shop_profits = []
+            for shop in shops:
+                sp = product["shops"].get(shop.pk, {})
+                row.append(sp.get("profit", "0.00"))
+                shop_profits.append(float(sp.get("profit", 0)))
+            row.append(sum(shop_profits))  # Total Profit
+            # Total units - sum across all shop rows for this product
+            total_units = Decimal("0.00")
+            for shop in shops:
+                sp = product["shops"].get(shop.pk, {})
+                total_units += sp.get("units", Decimal("0.00"))
+            row.append(total_units)  # Total Units
+            # Total revenue - sum across all shop rows for this product
+            total_revenue = Decimal("0.00")
+            for shop in shops:
+                sp = product["shops"].get(shop.pk, {})
+                total_revenue += sp.get("revenue", Decimal("0.00"))
+            row.append(total_revenue)  # Total Revenue
+            writer.writerow(row)
 
-    # Day-of-week rhythm over a fixed trailing window so "when in the week
-    # products move" stays comparable regardless of the range toggle.
-    weekday_units = [0.0] * 7
-    for row in (
-        DailySale.objects.filter(date__gte=today - timedelta(days=27))
-        .values('date')
-        .annotate(u=Sum('quantity_sold'))
-    ):
-        weekday_units[row['date'].weekday()] += float(row['u'] or 0)
-    payload['weekday'] = {
-        'labels': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        'values': weekday_units,
-        'window': 'Last 28 days',
-    }
-    return payload
+        # Determine filename
+        product_names = "+".join(
+            MasterProduct.objects.filter(id__in=product_ids).values_list("name", flat=True)[:5]
+        )
+        filename = f"product_comparison_{product_names}.csv"
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
