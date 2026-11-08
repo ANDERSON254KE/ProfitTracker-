@@ -2,9 +2,27 @@ from django.db import models
 from django.utils import timezone
 from decimal import Decimal
 
+class Shop(models.Model):
+    """Shop/branch where products are sold."""
+    SHOP_CHOICES = [
+        ('Fig Tree', 'Fig Tree'),
+        ('Empire Shop', 'Empire Shop'),
+        ('Emirates', 'Emirates'),
+        ('Small City', 'Small City'),
+        ('Chambers Point', 'Chambers Point'),
+    ]
+    name = models.CharField("Name", max_length=50, choices=SHOP_CHOICES, unique=True)
+    location = models.CharField("Location", max_length=255, blank=True, default='')
+
+    def __str__(self):
+        return self.name
+
+
 class Product(models.Model):
     product_name = models.CharField("Product", max_length=255)
-    shop = models.CharField("Shop/Branch", max_length=255, blank=True, null=True)
+    shop = models.ForeignKey(
+        Shop, on_delete=models.SET_NULL, blank=True, null=True
+    )
     category = models.CharField("Category", max_length=100, blank=True, null=True)
     cost_price = models.DecimalField("Cost Price", max_digits=10, decimal_places=2)
     selling_price = models.DecimalField("Default Selling Price", max_digits=10, decimal_places=2)
@@ -14,7 +32,24 @@ class Product(models.Model):
         ordering = ['order', 'product_name']
 
     def __str__(self):
-        return f"{self.product_name} ({self.shop if self.shop else 'N/A'})"
+        return f"{self.product_name} ({self.shop})"
+
+
+class ShopProduct(models.Model):
+    """Product available at a specific shop with pricing."""
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='shop_products')
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
+    cost_price = models.DecimalField("Cost Price", max_digits=10, decimal_places=2)
+    selling_price = models.DecimalField("Selling Price", max_digits=10, decimal_places=2)
+    is_active = models.BooleanField("Active", default=True)
+
+    class Meta:
+        unique_together = ('product', 'shop')
+        ordering = ['product__name', 'shop__name']
+
+    def __str__(self):
+        return f"{self.product} @ {self.shop}"
+
 
 class Transaction(models.Model):
     TYPE_CHOICES = [

@@ -32,7 +32,7 @@ from .mixins import (
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
 )
-from .models import CustomUser, DailySale, Shop, ShopProduct
+from .models import DailySale, Shop, ShopProduct
 from .price_list import price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
