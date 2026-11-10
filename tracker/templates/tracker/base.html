@@ -23,6 +23,14 @@
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'owner_dashboard' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
                             All Shops
                         </a>
+                        <a href="{% url 'product_report' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'product_report' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Reports
+                        </a>
+                        <a href="{% url 'product_comparison' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'product_comparison' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Compare
+                        </a>
                         <a href="{% url 'shop_pricing' %}"
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'shop_pricing' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
                             Pricing

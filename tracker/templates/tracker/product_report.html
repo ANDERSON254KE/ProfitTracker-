@@ -1,0 +1,82 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}Product Report · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Product Report</h1>
+        <p class="text-sm text-slate-500">Every product's all-time profit across all shops, best movers first</p>
+    </div>
+    <a href="{{ csv_export_url }}" download
+       class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
+        CSV Export
+    </a>
+</div>
+
+<div class="overflow-hidden rounded-xl bg-white shadow">
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-5 py-3 text-left font-semibold">Product</th>
+                    <th class="px-5 py-3 text-left font-semibold">Category</th>
+                    {% for shop in shops %}
+                    <th class="px-5 py-3 text-right font-semibold">{{ shop.name }}</th>
+                    {% endfor %}
+                    <th class="px-5 py-3 text-right font-semibold">Total Profit</th>
+                    <th class="px-5 py-3 text-right font-semibold">Total Units</th>
+                    <th class="px-5 py-3 text-right font-semibold">Total Revenue</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in rows %}
+                <tr class="hover:bg-slate-50">
+                    <td class="px-5 py-3 font-medium text-slate-900">{{ row.product.name }}</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">{{ row.product.category|default:"—" }}</td>
+                    {% for cell in row.shop_cells %}
+                    <td class="px-5 py-3 text-right align-top">
+                        <span class="{% if cell.profit < 0 %}text-rose-600{% elif cell.profit > 0 %}text-slate-700{% else %}text-slate-300{% endif %}">
+                            {{ cell.profit|ksh }}
+                        </span>
+                        {% if cell.units > 0 %}
+                        <span class="block text-xs text-slate-400">{{ cell.units|units }} u</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="px-5 py-3 text-right font-semibold {% if row.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                        {{ row.total_profit|ksh }}
+                    </td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.total_units|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.total_revenue|ksh }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="{{ shops|length|add:5 }}" class="px-5 py-6 text-center text-slate-500">
+                        No products in the catalogue yet.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            {% if rows %}
+            <tfoot class="border-t-2 border-slate-200 bg-slate-50 text-sm font-semibold">
+                <tr>
+                    <td class="px-5 py-3 text-slate-900" colspan="2">Shop totals</td>
+                    {% for total in shop_totals %}
+                    <td class="px-5 py-3 text-right {% if total.profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                        {{ total.profit|ksh }}
+                    </td>
+                    {% endfor %}
+                    <td class="px-5 py-3 text-right {% if grand_total < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                        {{ grand_total|ksh }}
+                    </td>
+                    <td class="px-5 py-3 text-right text-slate-400">—</td>
+                    <td class="px-5 py-3 text-right text-slate-400">—</td>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+{% endblock %}

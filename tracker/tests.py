@@ -378,6 +378,124 @@ class PageRenderTests(BaseDataTestCase):
         self.assertEqual(len(response.context["shop_rows"]), 2)
 
 
+class DashboardAnalyticsTests(BaseDataTestCase):
+    """The chart payloads that feed the dashboards' Chart.js analytics."""
+
+    def setUp(self):
+        super().setUp()
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("2"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, units_sold=Decimal("10"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("600.00"),
+            recorded_by=self.empire_manager,
+        )
+
+    def test_owner_dashboard_carries_the_chart_payload(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("owner_dashboard"))
+        analytics = response.context["analytics"]
+
+        # Per-shop profit comparison, best shop first.
+        self.assertEqual(analytics["shop_profits"]["labels"], ["Empire Shop", "Fig Tree"])
+        self.assertEqual(analytics["shop_profits"]["values"], [1500.0, 200.0])
+
+        # One trend dataset per shop, one label per chart day.
+        self.assertEqual(len(analytics["trend"]["datasets"]), 2)
+        self.assertEqual(len(analytics["trend"]["labels"]), 30)
+        self.assertEqual(response.context["week_profit"], Decimal("1700.00"))
+
+    def test_top_products_chart_lists_the_best_mover(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("owner_dashboard"))
+        top = response.context["analytics"]["top_products"]
+        self.assertEqual(top["labels"], ["Gilbeys · 250ml"])
+        self.assertEqual(top["values"], [1700.0])
+
+    def test_manager_dashboard_carries_a_14_day_trend(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("manager_dashboard"))
+        trend = response.context["trend"]
+        self.assertEqual(len(trend["labels"]), 14)
+        self.assertEqual(len(trend["values"]), 14)
+        self.assertEqual(sum(trend["values"]), 200.0)
+
+
+class ProductReportTests(BaseDataTestCase):
+    """The all-products cross-shop report page and its CSV export."""
+
+    def setUp(self):
+        super().setUp()
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("2"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, units_sold=Decimal("10"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("600.00"),
+            recorded_by=self.empire_manager,
+        )
+        # Blue Ice is stocked but has never sold anywhere.
+
+    def test_rows_split_each_product_by_shop(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report"))
+        rows = {row["product"].pk: row for row in response.context["rows"]}
+
+        cells = {cell["shop"].pk: cell for cell in rows[self.gilbeys.pk]["shop_cells"]}
+        self.assertEqual(cells[self.fig_tree.pk]["profit"], Decimal("200.00"))
+        self.assertEqual(cells[self.empire.pk]["profit"], Decimal("1500.00"))
+        self.assertEqual(rows[self.gilbeys.pk]["total_profit"], Decimal("1700.00"))
+
+        # Best mover comes first.
+        self.assertEqual(response.context["rows"][0]["product"], self.gilbeys)
+
+    def test_products_with_no_sales_are_included_with_zero_cells(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report"))
+        row = next(
+            row for row in response.context["rows"] if row["product"] == self.blue_ice
+        )
+        self.assertEqual(row["total_profit"], Decimal("0.00"))
+        self.assertTrue(all(cell["profit"] == Decimal("0.00") for cell in row["shop_cells"]))
+
+    def test_shop_totals_footer_matches_the_column_sums(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report"))
+        totals = {t["shop"].pk: t["profit"] for t in response.context["shop_totals"]}
+        self.assertEqual(totals[self.fig_tree.pk], Decimal("200.00"))
+        self.assertEqual(totals[self.empire.pk], Decimal("1500.00"))
+        self.assertEqual(response.context["grand_total"], Decimal("1700.00"))
+
+    def test_a_manager_is_refused(self):
+        self.client.force_login(self.fig_manager)
+        self.assertEqual(self.client.get(reverse("product_report")).status_code, 403)
+
+    def test_csv_export_lists_every_product_and_shop(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report_csv"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+        lines = response.content.decode().splitlines()
+        self.assertEqual(
+            lines[0], "Product,Category,Empire Shop profit,Fig Tree profit,"
+                      "Total Profit,Total Units,Total Revenue"
+        )
+        gilbeys_row = next(line for line in lines if line.startswith("Gilbeys"))
+        self.assertIn("1500.00", gilbeys_row)   # Empire cell
+        self.assertIn("200.00", gilbeys_row)    # Fig Tree cell
+        self.assertIn("1700.00", gilbeys_row)   # total profit
+
+    def test_csv_export_refuses_a_manager(self):
+        self.client.force_login(self.fig_manager)
+        self.assertEqual(self.client.get(reverse("product_report_csv")).status_code, 403)
+
+
 class ShopPricingTests(BaseDataTestCase):
     """The owner's inline price editor."""
 

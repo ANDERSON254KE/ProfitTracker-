@@ -7,6 +7,8 @@
     /manager/dashboard/               -> manager, their shop only
     /manager/sale/add/                -> manager, record a sale
     /api/shop-product-price/<pk>/     -> manager, price lookup for the preview JS
+    /product-comparison/              -> owner, compare up to 5 products
+    /products/report/                 -> owner, all-products cross-shop report
 """
 
 from django.urls import path
@@ -54,5 +56,16 @@ urlpatterns = [
         "product-comparison/export/",
         views.ProductComparisonCSVView.as_view(),
         name="product_comparison_csv",
+    ),
+    # All-products cross-shop report with CSV export
+    path(
+        "products/report/",
+        views.ProductReportView.as_view(),
+        name="product_report",
+    ),
+    path(
+        "products/report/export/",
+        views.ProductReportCSVView.as_view(),
+        name="product_report_csv",
     ),
 ]

@@ -13,14 +13,16 @@ computed by the model.
 
 from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
 from urllib.parse import urlencode
+import csv
 
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.db.models import Sum
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -38,6 +40,12 @@ from .price_list import price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
 OWNER_TREND_DAYS = 7
+#: Days spanned by the owner's dashboard profit-trend chart.
+OWNER_CHART_DAYS = 30
+#: Products listed in the owner's "top products" chart.
+OWNER_TOP_PRODUCTS = 10
+#: Days spanned by a manager's dashboard trend chart.
+MANAGER_CHART_DAYS = 14
 #: Number of recent sale lines shown on a manager's dashboard.
 MANAGER_HISTORY_ROWS = 15
 #: Kenyan shillings symbol used by the ``ksh`` template filter.
@@ -181,6 +189,55 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
             )
         context["trend_rows"] = trend_rows
         context["today"] = today
+
+        # --- Chart payloads, rendered by Chart.js in the template ---
+        week = sales.filter(sale_date__gte=window_start).aggregate(profit=Sum("profit"))
+        context["week_profit"] = _money(week["profit"])
+
+        chart_start = today - timedelta(days=OWNER_CHART_DAYS - 1)
+        chart_days = [chart_start + timedelta(days=i) for i in range(OWNER_CHART_DAYS)]
+        shop_trend = sales.filter(sale_date__gte=chart_start).values(
+            "sale_date", "shop"
+        ).annotate(profit=Sum("profit"))
+        trend_map = {}
+        for row in shop_trend:
+            trend_map.setdefault(row["sale_date"], {})[row["shop"]] = _money(
+                row["profit"]
+            )
+
+        top_products = (
+            sales.values("product__name", "product__category")
+            .annotate(profit=Sum("profit"))
+            .order_by("-profit")[:OWNER_TOP_PRODUCTS]
+        )
+        context["analytics"] = {
+            "shop_profits": {
+                "labels": [row["shop"].name for row in shop_rows],
+                "values": [float(row["profit"]) for row in shop_rows],
+            },
+            "trend": {
+                "labels": [day.strftime("%d %b") for day in chart_days],
+                "datasets": [
+                    {
+                        "label": shop.name,
+                        "data": [
+                            float(trend_map.get(day, {}).get(shop.pk, Decimal("0.00")))
+                            for day in chart_days
+                        ],
+                    }
+                    for shop in shops
+                ],
+            },
+            "top_products": {
+                "labels": [
+                    f"{row['product__name']} · {row['product__category']}"
+                    if row["product__category"]
+                    else row["product__name"]
+                    for row in top_products
+                ],
+                "values": [float(_money(row["profit"])) for row in top_products],
+            },
+        }
         return context
 
 
@@ -217,6 +274,20 @@ class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
         lifetime = sales.aggregate(profit=Sum("profit"), units=Sum("units_sold"))
         context["total_profit"] = _money(lifetime["profit"])
         context["total_units"] = _money(lifetime["units"])
+
+        # Daily profit chart for the manager's own shop, last 14 days.
+        trend_start = today - timedelta(days=MANAGER_CHART_DAYS - 1)
+        days = [trend_start + timedelta(days=i) for i in range(MANAGER_CHART_DAYS)]
+        per_day = {
+            row["sale_date"]: _money(row["profit"])
+            for row in sales.filter(sale_date__gte=trend_start)
+            .values("sale_date")
+            .annotate(profit=Sum("profit"))
+        }
+        context["trend"] = {
+            "labels": [day.strftime("%d %b") for day in days],
+            "values": [float(per_day.get(day, Decimal("0.00"))) for day in days],
+        }
 
         context["recent_sales"] = sales.order_by("-sale_date", "-id")[:MANAGER_HISTORY_ROWS]
         context["sale_form_url"] = reverse("daily_sales_sheet")
@@ -786,3 +857,112 @@ class ProductComparisonCSVView(OwnerRequiredMixin, View):
             return HttpResponseBadRequest("Select at least one product")
 
         return ProductComparisonView().get_csv_response(product_ids)
+
+
+def _product_report_rows():
+    """Return ``(shops, rows)`` for the all-products cross-shop report.
+
+    One row per product, sorted by total profit so the best movers are on
+    top. Each row carries an all-time profit/units/revenue cell per shop, in
+    ``shops`` order, plus product totals. Products with no sales anywhere are
+    included with zero cells, so the report also answers "which products
+    have never moved?".
+    """
+    shops = list(Shop.objects.all().order_by("name"))
+    aggregated = {
+        (row["product_id"], row["shop_id"]): row
+        for row in DailySale.objects.values("product_id", "shop_id").annotate(
+            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+        )
+    }
+
+    rows = []
+    for product in MasterProduct.objects.all().order_by("name", "category"):
+        shop_cells = []
+        for shop in shops:
+            row = aggregated.get((product.pk, shop.pk))
+            shop_cells.append(
+                {
+                    "shop": shop,
+                    "profit": _money(row["profit"]) if row else Decimal("0.00"),
+                    "units": _money(row["units"]) if row else Decimal("0.00"),
+                    "revenue": _money(row["revenue"]) if row else Decimal("0.00"),
+                }
+            )
+        rows.append(
+            {
+                "product": product,
+                "shop_cells": shop_cells,
+                "total_profit": sum(
+                    (cell["profit"] for cell in shop_cells), Decimal("0.00")
+                ),
+                "total_units": sum(
+                    (cell["units"] for cell in shop_cells), Decimal("0.00")
+                ),
+                "total_revenue": sum(
+                    (cell["revenue"] for cell in shop_cells), Decimal("0.00")
+                ),
+            }
+        )
+    rows.sort(key=lambda row: row["total_profit"], reverse=True)
+    return shops, rows
+
+
+class ProductReportView(OwnerRequiredMixin, TemplateView):
+    """All-time report: every product, one profit column per shop.
+
+    Complements :class:`ProductComparisonView`, which compares up to five
+    products the owner picks. This page shows the whole catalogue at once,
+    with per-shop profit cells, product totals and a shop totals footer, and
+    a CSV export for the spreadsheet workflow.
+    """
+
+    template_name = "tracker/product_report.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        shops, rows = _product_report_rows()
+        context["shops"] = shops
+        context["rows"] = rows
+
+        # Column totals for the table footer, aligned with ``shops``.
+        shop_totals = []
+        grand_total = Decimal("0.00")
+        for index, shop in enumerate(shops):
+            profit = sum(
+                (row["shop_cells"][index]["profit"] for row in rows), Decimal("0.00")
+            )
+            shop_totals.append({"shop": shop, "profit": profit})
+            grand_total += profit
+        context["shop_totals"] = shop_totals
+        context["grand_total"] = grand_total
+        context["csv_export_url"] = reverse("product_report_csv")
+        return context
+
+
+class ProductReportCSVView(OwnerRequiredMixin, View):
+    """Download the all-products cross-shop report as a CSV."""
+
+    def get(self, request, *args, **kwargs):
+        shops, rows = _product_report_rows()
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(
+            ["Product", "Category"]
+            + [f"{shop.name} profit" for shop in shops]
+            + ["Total Profit", "Total Units", "Total Revenue"]
+        )
+        for row in rows:
+            writer.writerow(
+                [row["product"].name, row["product"].category]
+                + [f"{cell['profit']:.2f}" for cell in row["shop_cells"]]
+                + [
+                    f"{row['total_profit']:.2f}",
+                    f"{row['total_units']:.2f}",
+                    f"{row['total_revenue']:.2f}",
+                ]
+            )
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="product_report.csv"'
+        return response

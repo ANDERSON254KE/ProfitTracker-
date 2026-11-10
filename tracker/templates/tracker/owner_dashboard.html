@@ -16,11 +16,17 @@
 </div>
 
 {# ---- Summary cards ---- #}
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
     <div class="rounded-xl bg-white p-5 shadow">
         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Profit (all shops)</p>
         <p class="mt-2 text-3xl font-bold {% if total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
             {{ total_profit|ksh }}
+        </p>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profit — Last 7 Days</p>
+        <p class="mt-2 text-3xl font-bold {% if week_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ week_profit|ksh }}
         </p>
     </div>
     <div class="rounded-xl bg-white p-5 shadow">
@@ -30,6 +36,30 @@
     <div class="rounded-xl bg-white p-5 shadow">
         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Revenue</p>
         <p class="mt-2 text-3xl font-bold text-slate-900">{{ total_revenue|ksh }}</p>
+    </div>
+</div>
+
+{# ---- Charts ---- #}
+<div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="rounded-xl bg-white p-5 shadow">
+        <h2 class="text-base font-semibold text-slate-900">Profit by shop — all time</h2>
+        <p class="text-xs text-slate-500">Compare each branch's lifetime profit</p>
+        <div class="mt-4 h-72"><canvas id="chart-shop-profit"></canvas></div>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow">
+        <h2 class="text-base font-semibold text-slate-900">Profit share by shop</h2>
+        <p class="text-xs text-slate-500">Share of total profit</p>
+        <div class="mt-4 h-72"><canvas id="chart-shop-share"></canvas></div>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow lg:col-span-2">
+        <h2 class="text-base font-semibold text-slate-900">Daily profit by shop — last 30 days</h2>
+        <p class="text-xs text-slate-500">One line per branch</p>
+        <div class="mt-4 h-80"><canvas id="chart-trend"></canvas></div>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow lg:col-span-2">
+        <h2 class="text-base font-semibold text-slate-900">Top products by profit — all time</h2>
+        <p class="text-xs text-slate-500">Across every shop</p>
+        <div class="mt-4 h-96"><canvas id="chart-top-products"></canvas></div>
     </div>
 </div>
 
@@ -107,4 +137,135 @@
         </table>
     </div>
 </div>
+
+{{ analytics|json_script:"owner-analytics" }}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    var payloadEl = document.getElementById('owner-analytics');
+    if (!payloadEl || typeof Chart === 'undefined') return;
+    var A = JSON.parse(payloadEl.textContent);
+    var PALETTE = ['#4f46e5', '#16a34a', '#d97706', '#0891b2', '#dc2626',
+                   '#9333ea', '#65a30d', '#0e7490', '#be123c', '#7c3aed'];
+    var GRID = 'rgba(24, 24, 27, .07)';
+
+    Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+    Chart.defaults.color = '#64748b';
+
+    function money(v) {
+        return 'KSh ' + Number(v).toLocaleString('en-KE', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+        });
+    }
+
+    var hasShopProfit = A.shop_profits.labels.some(function (v) { return v > 0; });
+
+    new Chart(document.getElementById('chart-shop-profit'), {
+        type: 'bar',
+        data: {
+            labels: A.shop_profits.labels,
+            datasets: [{
+                label: 'Profit',
+                data: A.shop_profits.values,
+                backgroundColor: A.shop_profits.labels.map(function (_, i) {
+                    return PALETTE[i % PALETTE.length];
+                }),
+                borderRadius: 6, maxBarThickness: 46
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function (c) { return ' ' + money(c.parsed.y); } } }
+            },
+            scales: {
+                x: { grid: { display: false }, border: { display: false } },
+                y: { grid: { color: GRID }, border: { display: false },
+                     ticks: { callback: function (v) { return 'KSh ' + Number(v).toLocaleString(); } } }
+            }
+        }
+    });
+
+    if (hasShopProfit) {
+        new Chart(document.getElementById('chart-shop-share'), {
+            type: 'doughnut',
+            data: {
+                labels: A.shop_profits.labels,
+                datasets: [{
+                    data: A.shop_profits.values,
+                    backgroundColor: A.shop_profits.labels.map(function (_, i) {
+                        return PALETTE[i % PALETTE.length];
+                    }),
+                    borderColor: '#ffffff', borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '58%',
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true, font: { size: 11 } } },
+                    tooltip: { callbacks: { label: function (c) { return ' ' + money(c.parsed); } } }
+                }
+            }
+        });
+    }
+
+    new Chart(document.getElementById('chart-trend'), {
+        type: 'line',
+        data: {
+            labels: A.trend.labels,
+            datasets: A.trend.datasets.map(function (s, i) {
+                return {
+                    label: s.label, data: s.data,
+                    borderColor: PALETTE[i % PALETTE.length],
+                    backgroundColor: PALETTE[i % PALETTE.length],
+                    borderWidth: 2, tension: .35, pointRadius: 2, pointHoverRadius: 5
+                };
+            })
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+                tooltip: { callbacks: { label: function (c) { return ' ' + c.dataset.label + ': ' + money(c.parsed.y); } } }
+            },
+            scales: {
+                x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 15 } },
+                y: { grid: { color: GRID }, border: { display: false },
+                     ticks: { callback: function (v) { return 'KSh ' + Number(v).toLocaleString(); } } }
+            }
+        }
+    });
+
+    if (A.top_products.labels.length) {
+        new Chart(document.getElementById('chart-top-products'), {
+            type: 'bar',
+            data: {
+                labels: A.top_products.labels,
+                datasets: [{
+                    label: 'Profit',
+                    data: A.top_products.values,
+                    backgroundColor: '#4f46e5', borderRadius: 6, maxBarThickness: 26
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: function (c) { return ' ' + money(c.parsed.x); } } }
+                },
+                scales: {
+                    x: { grid: { color: GRID }, border: { display: false },
+                         ticks: { callback: function (v) { return 'KSh ' + Number(v).toLocaleString(); } } },
+                    y: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 11 } } }
+                }
+            }
+        });
+    }
+})();
+</script>
 {% endblock %}

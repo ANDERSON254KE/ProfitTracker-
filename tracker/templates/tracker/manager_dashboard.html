@@ -51,6 +51,13 @@
         </div>
     </div>
 
+    {# ---- Daily profit trend ---- #}
+    <div class="mt-6 rounded-xl bg-white p-5 shadow">
+        <h2 class="text-base font-semibold text-slate-900">Daily profit — last 14 days</h2>
+        <p class="text-xs text-slate-500">{{ shop.name }}</p>
+        <div class="mt-4 h-64"><canvas id="chart-manager-trend"></canvas></div>
+    </div>
+
     {# ---- Recent sales ---- #}
     <div class="mt-6 rounded-xl bg-white shadow">
         <div class="border-b border-slate-200 px-5 py-4">
@@ -95,5 +102,56 @@
             </table>
         </div>
     </div>
+
+    {{ trend|json_script:"manager-trend" }}
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    var payloadEl = document.getElementById('manager-trend');
+    if (!payloadEl || typeof Chart === 'undefined') return;
+    var T = JSON.parse(payloadEl.textContent);
+    var GRID = 'rgba(24, 24, 27, .07)';
+
+    Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+    Chart.defaults.color = '#64748b';
+
+    function money(v) {
+        return 'KSh ' + Number(v).toLocaleString('en-KE', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+        });
+    }
+
+    new Chart(document.getElementById('chart-manager-trend'), {
+        type: 'line',
+        data: {
+            labels: T.labels,
+            datasets: [{
+                label: 'Profit',
+                data: T.values,
+                borderColor: '#4f46e5',
+                backgroundColor: 'rgba(79, 70, 229, .12)',
+                fill: true,
+                borderWidth: 2, tension: .35, pointRadius: 2.5, pointHoverRadius: 5
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: function (c) { return ' ' + money(c.parsed.y); } } }
+            },
+            scales: {
+                x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 14 } },
+                y: { grid: { color: GRID }, border: { display: false },
+                     ticks: { callback: function (v) { return 'KSh ' + Number(v).toLocaleString(); } } }
+            }
+        }
+    });
+})();
+</script>
 {% endblock %}
