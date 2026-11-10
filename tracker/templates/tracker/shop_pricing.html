@@ -85,11 +85,25 @@
     </div>
 {% endif %}
 
+<style>
+    @media (prefers-reduced-motion: no-preference) {
+        .pricing-sheet-backdrop,
+        .pricing-sheet-panel {
+            transition: opacity 180ms ease, transform 180ms ease;
+        }
+
+        .pricing-sheet-backdrop { opacity: 0; }
+        .pricing-sheet-panel { transform: translateX(100%); }
+        .sheet.is-open .pricing-sheet-backdrop { opacity: 1; }
+        .sheet.is-open .pricing-sheet-panel { transform: translateX(0); }
+    }
+</style>
+
 {% for shop, shop_products in grouped_products.items %}
 <div id="shop-sheet-{{ shop.pk }}" class="sheet fixed inset-0 z-50 hidden" aria-hidden="true">
-    <div class="absolute inset-0 bg-slate-950/50 backdrop-blur-sm" data-close-sheet="shop-sheet-{{ shop.pk }}"></div>
-    <div class="absolute right-0 top-0 flex h-full w-full max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:max-w-3xl">
-        <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+    <div class="pricing-sheet-backdrop absolute inset-0 bg-slate-950/50 backdrop-blur-sm" data-close-sheet="shop-sheet-{{ shop.pk }}"></div>
+    <div class="pricing-sheet-panel absolute right-0 top-0 flex h-dvh max-h-dvh w-full max-w-full min-w-0 flex-col border-l border-slate-200 bg-white shadow-2xl sm:max-w-3xl">
+        <div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-4 sm:px-6">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Edit</p>
                 <h2 class="mt-1 text-xl font-semibold text-slate-900">{{ shop.name }}</h2>
@@ -99,11 +113,11 @@
             </button>
         </div>
 
-        <form method="post" class="flex flex-1 flex-col">
+        <form method="post" class="flex min-h-0 min-w-0 flex-1 flex-col">
             {% csrf_token %}
             <input type="hidden" name="shop" value="{{ shop.pk }}">
-            <div class="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-6 sm:py-5">
-                <div class="overflow-x-auto max-w-full">
+            <div class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-4 sm:px-6 sm:py-5">
+                <div class="max-w-full overflow-x-auto overscroll-x-contain">
                 <table class="min-w-[640px] max-w-full divide-y divide-slate-200 text-sm">
                     <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                         <tr>
@@ -142,7 +156,7 @@
                 </div>
             </div>
 
-            <div class="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-4">
+            <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-6 sm:py-4">
                 <span class="text-sm text-slate-500">Save changes for {{ shop.name }} only.</span>
                 <button type="submit" class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
                     Save prices
@@ -170,14 +184,24 @@
         const sheet = document.getElementById(sheetId);
         if (!sheet) return;
         sheet.classList.remove("hidden");
+        sheet.setAttribute("aria-hidden", "false");
         document.body.classList.add("overflow-hidden");
+        requestAnimationFrame(function () {
+            sheet.classList.add("is-open");
+        });
     };
 
     const closeSheet = function (sheetId) {
         const sheet = document.getElementById(sheetId);
         if (!sheet) return;
-        sheet.classList.add("hidden");
+        sheet.classList.remove("is-open");
+        sheet.setAttribute("aria-hidden", "true");
         document.body.classList.remove("overflow-hidden");
+        window.setTimeout(function () {
+            if (sheet.getAttribute("aria-hidden") === "true") {
+                sheet.classList.add("hidden");
+            }
+        }, 180);
     };
 
     document.querySelectorAll(".sheet-trigger").forEach(function (trigger) {

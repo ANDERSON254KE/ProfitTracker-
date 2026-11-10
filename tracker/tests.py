@@ -376,6 +376,7 @@ class PageRenderTests(BaseDataTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "overflow-x-auto")
         self.assertContains(response, "max-w-full")
+        self.assertContains(response, "min-h-0 min-w-0 flex-1 overflow-y-auto")
 
     def test_owner_sees_a_shop_with_no_sales_without_erroring(self):
         """Every shop gets a column in the 7-day table, even an empty one."""
@@ -617,6 +618,23 @@ class ProductComparisonFeatureTests(BaseDataTestCase):
             [cell["shop"].pk for cell in response.context["comparison_data"][0]["shop_cells"]],
             [self.fig_tree.pk],
         )
+
+    def test_category_label_from_product_suggestions_resolves_in_single_shop_scope(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_comparison"),
+            {
+                "product_a": "Gilbeys — 250ml",
+                "product_b": "Blue Ice — 250ml",
+                "shop": self.empire.pk,
+            },
+        )
+        self.assertEqual(
+            [item["product_id"] for item in response.context["comparison_data"]],
+            [self.gilbeys.pk, self.blue_ice.pk],
+        )
+        self.assertEqual(response.context["selected_shop"], self.empire)
+        self.assertEqual(response.context["comparison_data"][0]["total_profit"], Decimal("1500.00"))
 
 
 class ProductReportTests(BaseDataTestCase):

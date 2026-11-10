@@ -642,6 +642,14 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
                 pass
 
             match = MasterProduct.objects.filter(name__iexact=value).first()
+            if match is None and " — " in value:
+                product_name, category = value.rsplit(" — ", 1)
+                match = MasterProduct.objects.filter(
+                    name__iexact=product_name,
+                    category__iexact=category,
+                ).first()
+                if match is None:
+                    match = MasterProduct.objects.filter(name__iexact=product_name).first()
             if match is None:
                 match = MasterProduct.objects.filter(name__icontains=value).order_by("name").first()
             if match is not None:
