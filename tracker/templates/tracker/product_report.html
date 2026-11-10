@@ -11,35 +11,93 @@
     </div>
 </div>
 
-<div class="mb-6 flex flex-wrap items-end justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+<div class="mb-6 grid gap-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
     <div>
-        <h2 class="text-base font-semibold text-slate-900">Daily profit sheet</h2>
-        <p class="mt-1 text-sm text-slate-500">Choose a shop to enter products sold and daily expenses.</p>
+        <h2 class="text-base font-semibold text-slate-900">All-shops profit workbook</h2>
+        <p class="mt-1 text-sm text-slate-500">Report period: {{ profit_start_date }} to {{ profit_end_date }}</p>
+        <form method="get" action="{% url 'product_report' %}" class="mt-4 flex flex-wrap items-end gap-3">
+            <div>
+                <label for="profitStartDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">From</label>
+                <input id="profitStartDate" name="start_date" type="date" value="{{ profit_start_date }}" required
+                       class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="profitEndDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">To</label>
+                <input id="profitEndDate" name="end_date" type="date" value="{{ profit_end_date }}" required
+                       class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <button type="submit" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Preview dates</button>
+            <a href="{{ profit_workbook_url }}" download
+               class="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600">Download workbook</a>
+        </form>
     </div>
-    <form method="get" action="{% url 'product_report' %}" class="flex w-full flex-wrap items-end gap-3 sm:w-auto">
-        <div class="min-w-52 flex-1 sm:flex-none">
-            <label for="profitSheetShop" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shop</label>
-            <select id="profitSheetShop" name="open_sheet_shop" required
-                    class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                <option value="" disabled selected>Select a shop</option>
-                {% for shop in shops %}
-                <option value="{{ shop.pk }}">{{ shop.name }}</option>
-                {% endfor %}
-            </select>
+    <div class="flex flex-wrap items-end justify-between gap-3 border-t border-slate-200 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">Daily profit sheet</h2>
+            <p class="mt-1 text-sm text-slate-500">Choose a shop to enter products sold and expenses.</p>
         </div>
-        <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Open profit sheet</button>
-    </form>
-    <div class="flex flex-wrap gap-2">
-        <a href="{% url 'all_shops_profit_workbook' %}" download
-           class="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600">
-            Download all-shops profit sheet
-        </a>
-        <a href="{{ csv_export_url }}" download
-           class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
-            CSV Export
-        </a>
+        <form method="get" action="{% url 'product_report' %}" class="flex flex-wrap items-end gap-2">
+            <div>
+                <label for="profitSheetShop" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shop</label>
+                <select id="profitSheetShop" name="open_sheet_shop" required
+                        class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                    <option value="" disabled selected>Select a shop</option>
+                    {% for shop in shops %}<option value="{{ shop.pk }}">{{ shop.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Open</button>
+        </form>
+        <a href="{{ csv_export_url }}" download class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">CSV Export</a>
     </div>
 </div>
+
+<section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Workbook preview</h2>
+        <p class="mt-1 text-sm text-slate-500">{{ profit_start_date }} to {{ profit_end_date }}</p>
+    </div>
+    <details open class="border-b border-slate-200">
+        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Shop Summary · {{ shops|length }} shops</summary>
+        <div class="overflow-x-auto px-5 pb-4">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+                    <th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-right">Units</th><th class="px-3 py-2 text-right">Revenue</th><th class="px-3 py-2 text-right">Product Cost</th><th class="px-3 py-2 text-right">Gross Profit</th><th class="px-3 py-2 text-right">Expenses</th><th class="px-3 py-2 text-right">Net Profit</th>
+                </tr></thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in profit_report.summary_rows %}<tr><td class="px-3 py-2 font-medium">{{ row.shop.name }}</td><td class="px-3 py-2 text-right">{{ row.units|units }}</td><td class="px-3 py-2 text-right">{{ row.revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ row.cost|ksh }}</td><td class="px-3 py-2 text-right">{{ row.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ row.expenses|ksh }}</td><td class="px-3 py-2 text-right font-semibold">{{ row.net|ksh }}</td></tr>{% endfor %}
+                </tbody>
+                <tfoot class="border-t-2 border-slate-200 bg-slate-50 font-semibold"><tr><td class="px-3 py-2">All shops</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.units|units }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.cost|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.expenses|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.net|ksh }}</td></tr></tfoot>
+            </table>
+        </div>
+    </details>
+    <details class="border-b border-slate-200">
+        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Product Sales · {{ product_sales_count }} rows</summary>
+        <div class="overflow-x-auto px-5 pb-4">
+            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-left">Product</th><th class="px-3 py-2 text-right">Units</th><th class="px-3 py-2 text-right">Revenue</th><th class="px-3 py-2 text-right">Profit</th></tr></thead><tbody class="divide-y divide-slate-100">
+                {% for sale in product_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ sale.sale_date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ sale.shop.name }}</td><td class="px-3 py-2">{{ sale.product.name }}{% if sale.product.category %} · {{ sale.product.category }}{% endif %}</td><td class="px-3 py-2 text-right">{{ sale.units_sold|units }}</td><td class="px-3 py-2 text-right">{{ sale.total_revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ sale.profit|ksh }}</td></tr>{% empty %}<tr><td colspan="6" class="px-3 py-5 text-center text-slate-500">No product sales in this period.</td></tr>{% endfor %}
+            </tbody></table>
+            {% if product_sales_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ product_sales_count }} rows. The download contains all rows.</p>{% endif %}
+        </div>
+    </details>
+    <details class="border-b border-slate-200">
+        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Expenses · {{ expense_count }} rows</summary>
+        <div class="overflow-x-auto px-5 pb-4">
+            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-left">Description</th><th class="px-3 py-2 text-right">Amount</th><th class="px-3 py-2 text-left">Recorded By</th></tr></thead><tbody class="divide-y divide-slate-100">
+                {% for expense in expense_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ expense.expense_date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ expense.shop.name }}</td><td class="px-3 py-2">{{ expense.description }}</td><td class="px-3 py-2 text-right">{{ expense.amount|ksh }}</td><td class="px-3 py-2">{{ expense.recorded_by.username }}</td></tr>{% empty %}<tr><td colspan="5" class="px-3 py-5 text-center text-slate-500">No expenses in this period.</td></tr>{% endfor %}
+            </tbody></table>
+            {% if expense_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ expense_count }} rows. The download contains all rows.</p>{% endif %}
+        </div>
+    </details>
+    <details>
+        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Daily Net Profit · {{ daily_count }} rows</summary>
+        <div class="overflow-x-auto px-5 pb-4">
+            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-right">Gross Profit</th><th class="px-3 py-2 text-right">Expenses</th><th class="px-3 py-2 text-right">Net Profit</th></tr></thead><tbody class="divide-y divide-slate-100">
+                {% for row in daily_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ row.date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ row.shop.name }}</td><td class="px-3 py-2 text-right">{{ row.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ row.expenses|ksh }}</td><td class="px-3 py-2 text-right font-semibold">{{ row.net|ksh }}</td></tr>{% empty %}<tr><td colspan="5" class="px-3 py-5 text-center text-slate-500">No sales or expenses in this period.</td></tr>{% endfor %}
+            </tbody></table>
+            {% if daily_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ daily_count }} rows. The download contains all rows.</p>{% endif %}
+        </div>
+    </details>
+</section>
 
 <div class="overflow-hidden rounded-xl bg-white shadow">
     <div class="overflow-x-auto">

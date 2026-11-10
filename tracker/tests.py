@@ -807,7 +807,7 @@ class ProductReportTests(BaseDataTestCase):
         self.assertEqual(expense_row[4], "figtree")
 
         daily_row = next(
-            row for row in list(workbook["Daily Net Profit"].values)[1:]
+            row for row in list(workbook["Daily Net Profit"].values)[2:]
             if row[0].date() == expense_day and row[1] == "Fig Tree"
         )
         self.assertEqual(daily_row[6], 50)
@@ -818,6 +818,32 @@ class ProductReportTests(BaseDataTestCase):
         self.assertEqual(
             self.client.get(reverse("all_shops_profit_workbook")).status_code, 403
         )
+
+    def test_selected_date_range_is_visible_in_preview_and_filters_workbook(self):
+        today = timezone.localdate()
+        older_day = today - timedelta(days=3)
+        old_sale = DailySale.objects.create(
+            shop=self.fig_tree, product=self.blue_ice, units_sold=Decimal("2"),
+            unit_cost_at_sale=Decimal("150.00"), unit_price_at_sale=Decimal("200.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.filter(pk=old_sale.pk).update(sale_date=older_day)
+        self.client.force_login(self.owner)
+        params = {"start_date": today.isoformat(), "end_date": today.isoformat()}
+
+        preview = self.client.get(reverse("product_report"), params)
+        self.assertEqual(preview.context["profit_start_date"], today.isoformat())
+        self.assertEqual(preview.context["profit_end_date"], today.isoformat())
+        self.assertEqual(preview.context["product_sales_count"], 2)
+        self.assertContains(preview, f"{today.isoformat()} to {today.isoformat()}")
+        self.assertContains(preview, "Workbook preview")
+
+        response = self.client.get(reverse("all_shops_profit_workbook"), params)
+        self.assertIn(today.strftime("%Y%m%d"), response["Content-Disposition"])
+        workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
+        sales_rows = list(workbook["Product Sales"].values)[2:]
+        self.assertEqual(len(sales_rows), 2)
+        self.assertTrue(all(row[0].date() == today for row in sales_rows))
 
 
 class ShopPricingTests(BaseDataTestCase):

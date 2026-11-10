@@ -1213,6 +1213,116 @@ def _product_report_rows():
     return shops, rows
 
 
+def _all_shops_profit_report(start_date, end_date):
+    """Build the shared date-filtered data used by the report preview and XLSX."""
+    shops = list(Shop.objects.all().order_by("name"))
+    sales = list(
+        DailySale.objects.filter(sale_date__range=(start_date, end_date))
+        .select_related("shop", "product")
+        .order_by("sale_date", "shop__name", "product__name", "product__category", "pk")
+    )
+    expenses = list(
+        ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
+        .select_related("shop", "recorded_by")
+        .order_by("expense_date", "shop__name", "pk")
+    )
+
+    sales_by_shop = {
+        row["shop_id"]: row
+        for row in DailySale.objects.filter(sale_date__range=(start_date, end_date))
+        .values("shop_id")
+        .annotate(
+            units=Sum("units_sold"), revenue=Sum("total_revenue"),
+            cost=Sum("total_cost"), profit=Sum("profit"),
+        )
+    }
+    expenses_by_shop = {
+        row["shop_id"]: _money(row["amount"])
+        for row in ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
+        .values("shop_id")
+        .annotate(amount=Sum("amount"))
+    }
+    daily_sales = {
+        (row["sale_date"], row["shop_id"]): row
+        for row in DailySale.objects.filter(sale_date__range=(start_date, end_date))
+        .values("sale_date", "shop_id")
+        .annotate(
+            units=Sum("units_sold"), revenue=Sum("total_revenue"),
+            cost=Sum("total_cost"), profit=Sum("profit"),
+        )
+    }
+    daily_expenses = {
+        (row["expense_date"], row["shop_id"]): _money(row["amount"])
+        for row in ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
+        .values("expense_date", "shop_id")
+        .annotate(amount=Sum("amount"))
+    }
+
+    summary_rows = []
+    for shop in shops:
+        sales_row = sales_by_shop.get(shop.pk, {})
+        gross = _money(sales_row.get("profit"))
+        expenses_total = expenses_by_shop.get(shop.pk, Decimal("0.00"))
+        summary_rows.append({
+            "shop": shop,
+            "units": _money(sales_row.get("units")),
+            "revenue": _money(sales_row.get("revenue")),
+            "cost": _money(sales_row.get("cost")),
+            "gross": gross,
+            "expenses": expenses_total,
+            "net": gross - expenses_total,
+        })
+
+    shops_by_id = {shop.pk: shop for shop in shops}
+    daily_rows = []
+    for day, shop_id in sorted(set(daily_sales) | set(daily_expenses)):
+        sales_row = daily_sales.get((day, shop_id), {})
+        gross = _money(sales_row.get("profit"))
+        expenses_total = daily_expenses.get((day, shop_id), Decimal("0.00"))
+        daily_rows.append({
+            "date": day,
+            "shop": shops_by_id[shop_id],
+            "units": _money(sales_row.get("units")),
+            "revenue": _money(sales_row.get("revenue")),
+            "cost": _money(sales_row.get("cost")),
+            "gross": gross,
+            "expenses": expenses_total,
+            "net": gross - expenses_total,
+        })
+
+    all_gross = sum((row["gross"] for row in summary_rows), Decimal("0.00"))
+    all_expenses = sum((row["expenses"] for row in summary_rows), Decimal("0.00"))
+    summary_totals = {
+        "units": sum((row["units"] for row in summary_rows), Decimal("0.00")),
+        "revenue": sum((row["revenue"] for row in summary_rows), Decimal("0.00")),
+        "cost": sum((row["cost"] for row in summary_rows), Decimal("0.00")),
+        "gross": all_gross,
+        "expenses": all_expenses,
+        "net": all_gross - all_expenses,
+    }
+    return {
+        "shops": shops,
+        "sales": sales,
+        "expenses": expenses,
+        "summary_rows": summary_rows,
+        "summary_totals": summary_totals,
+        "daily_rows": daily_rows,
+    }
+
+
+def _all_shops_profit_date_range(request):
+    """Return a valid date range, defaulting to all recorded history through today."""
+    today = timezone.localdate()
+    first_sale = DailySale.objects.order_by("sale_date").values_list("sale_date", flat=True).first()
+    first_expense = ShopExpense.objects.order_by("expense_date").values_list("expense_date", flat=True).first()
+    earliest = min((day for day in (first_sale, first_expense) if day), default=today)
+    start_date = _parse_date(request.GET.get("start_date")) or earliest
+    end_date = _parse_date(request.GET.get("end_date")) or today
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    return start_date, end_date
+
+
 class ProductReportView(OwnerRequiredMixin, TemplateView):
     """All-time report: every product, one profit column per shop.
 
@@ -1234,6 +1344,8 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         shops, rows = _product_report_rows()
+        start_date, end_date = _all_shops_profit_date_range(self.request)
+        profit_report = _all_shops_profit_report(start_date, end_date)
         context["shops"] = shops
         context["rows"] = rows
 
@@ -1249,6 +1361,20 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
         context["shop_totals"] = shop_totals
         context["grand_total"] = grand_total
         context["csv_export_url"] = reverse("product_report_csv")
+        context["profit_start_date"] = start_date.isoformat()
+        context["profit_end_date"] = end_date.isoformat()
+        context["profit_report"] = profit_report
+        context["product_preview"] = profit_report["sales"][:10]
+        context["expense_preview"] = profit_report["expenses"][:10]
+        context["daily_preview"] = profit_report["daily_rows"][:10]
+        context["product_sales_count"] = len(profit_report["sales"])
+        context["expense_count"] = len(profit_report["expenses"])
+        context["daily_count"] = len(profit_report["daily_rows"])
+        workbook_params = urlencode({
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        })
+        context["profit_workbook_url"] = f"{reverse('all_shops_profit_workbook')}?{workbook_params}"
         return context
 
 
@@ -1281,85 +1407,38 @@ class ProductReportCSVView(OwnerRequiredMixin, View):
 
 
 class AllShopsProfitWorkbookView(OwnerRequiredMixin, View):
-    """Download all shops' lifetime product profits and expenses as one workbook."""
+    """Download all shops' product profits and expenses for a date range."""
 
     def get(self, request, *args, **kwargs):
-        shops = list(Shop.objects.all().order_by("name"))
-        sales = list(
-            DailySale.objects.select_related("shop", "product")
-            .order_by("sale_date", "shop__name", "product__name", "product__category", "pk")
-        )
-        expenses = list(
-            ShopExpense.objects.select_related("shop", "recorded_by")
-            .order_by("expense_date", "shop__name", "pk")
-        )
-
-        sales_by_shop = {
-            row["shop_id"]: row
-            for row in DailySale.objects.values("shop_id").annotate(
-                units=Sum("units_sold"),
-                revenue=Sum("total_revenue"),
-                cost=Sum("total_cost"),
-                profit=Sum("profit"),
-            )
-        }
-        expenses_by_shop = {
-            row["shop_id"]: _money(row["amount"])
-            for row in ShopExpense.objects.values("shop_id").annotate(amount=Sum("amount"))
-        }
-        daily_sales = {
-            (row["sale_date"], row["shop_id"]): row
-            for row in DailySale.objects.values("sale_date", "shop_id").annotate(
-                units=Sum("units_sold"),
-                revenue=Sum("total_revenue"),
-                cost=Sum("total_cost"),
-                profit=Sum("profit"),
-            )
-        }
-        daily_expenses = {
-            (row["expense_date"], row["shop_id"]): _money(row["amount"])
-            for row in ShopExpense.objects.values("expense_date", "shop_id").annotate(
-                amount=Sum("amount")
-            )
-        }
+        start_date, end_date = _all_shops_profit_date_range(request)
+        data = _all_shops_profit_report(start_date, end_date)
 
         workbook = Workbook()
         summary = workbook.active
         summary.title = "Shop Summary"
+        summary.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
         summary.append([
             "Shop", "Units Sold", "Revenue (KSh)", "Product Cost (KSh)",
             "Gross Profit (KSh)", "Expenses (KSh)", "Net Profit (KSh)",
         ])
-        for shop in shops:
-            sold = sales_by_shop.get(shop.pk, {})
-            gross = _money(sold.get("profit"))
-            expense_total = expenses_by_shop.get(shop.pk, Decimal("0.00"))
+        for row in data["summary_rows"]:
             summary.append([
-                shop.name,
-                _money(sold.get("units")),
-                _money(sold.get("revenue")),
-                _money(sold.get("cost")),
-                gross,
-                expense_total,
-                gross - expense_total,
+                row["shop"].name, row["units"], row["revenue"], row["cost"],
+                row["gross"], row["expenses"], row["net"],
             ])
+        totals = data["summary_totals"]
         summary.append([
-            "ALL SHOPS",
-            sum((_money(row.get("units")) for row in sales_by_shop.values()), Decimal("0.00")),
-            sum((_money(row.get("revenue")) for row in sales_by_shop.values()), Decimal("0.00")),
-            sum((_money(row.get("cost")) for row in sales_by_shop.values()), Decimal("0.00")),
-            sum((_money(row.get("profit")) for row in sales_by_shop.values()), Decimal("0.00")),
-            sum(expenses_by_shop.values(), Decimal("0.00")),
-            sum((_money(row.get("profit")) for row in sales_by_shop.values()), Decimal("0.00"))
-            - sum(expenses_by_shop.values(), Decimal("0.00")),
+            "ALL SHOPS", totals["units"], totals["revenue"], totals["cost"],
+            totals["gross"], totals["expenses"], totals["net"],
         ])
 
         product_sheet = workbook.create_sheet("Product Sales")
+        product_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
         product_sheet.append([
             "Date", "Shop", "Product", "Category", "Units Sold", "Unit Cost (KSh)",
             "Unit Selling Price (KSh)", "Revenue (KSh)", "Product Cost (KSh)", "Profit (KSh)",
         ])
-        for sale in sales:
+        for sale in data["sales"]:
             product_sheet.append([
                 sale.sale_date, sale.shop.name, sale.product.name, sale.product.category,
                 sale.units_sold, sale.unit_cost_at_sale, sale.unit_price_at_sale,
@@ -1367,40 +1446,33 @@ class AllShopsProfitWorkbookView(OwnerRequiredMixin, View):
             ])
 
         expense_sheet = workbook.create_sheet("Expenses")
+        expense_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
         expense_sheet.append(["Date", "Shop", "Description", "Amount (KSh)", "Recorded By"])
-        for expense in expenses:
+        for expense in data["expenses"]:
             expense_sheet.append([
                 expense.expense_date, expense.shop.name, expense.description,
                 expense.amount, expense.recorded_by.username,
             ])
 
         daily_sheet = workbook.create_sheet("Daily Net Profit")
+        daily_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
         daily_sheet.append([
             "Date", "Shop", "Units Sold", "Revenue (KSh)", "Product Cost (KSh)",
             "Gross Profit (KSh)", "Expenses (KSh)", "Net Profit (KSh)",
         ])
-        daily_keys = sorted(set(daily_sales) | set(daily_expenses))
-        shops_by_id = {shop.pk: shop for shop in shops}
-        for day, shop_id in daily_keys:
-            sold = daily_sales.get((day, shop_id), {})
-            gross = _money(sold.get("profit"))
-            expense_total = daily_expenses.get((day, shop_id), Decimal("0.00"))
+        for row in data["daily_rows"]:
             daily_sheet.append([
-                day,
-                shops_by_id[shop_id].name,
-                _money(sold.get("units")),
-                _money(sold.get("revenue")),
-                _money(sold.get("cost")),
-                gross,
-                expense_total,
-                gross - expense_total,
+                row["date"], row["shop"].name, row["units"], row["revenue"],
+                row["cost"], row["gross"], row["expenses"], row["net"],
             ])
 
         money_format = '"KSh" #,##0.00;[Red]-"KSh" #,##0.00'
         for sheet in workbook.worksheets:
-            sheet.freeze_panes = "A2"
-            sheet.auto_filter.ref = sheet.dimensions
-            for cell in sheet[1]:
+            sheet.freeze_panes = "A3"
+            sheet.auto_filter.ref = (
+                f"A2:{sheet.cell(sheet.max_row, sheet.max_column).coordinate}"
+            )
+            for cell in sheet[2]:
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill("solid", fgColor="1E293B")
                 cell.alignment = Alignment(vertical="center")
@@ -1408,7 +1480,7 @@ class AllShopsProfitWorkbookView(OwnerRequiredMixin, View):
                 letter = column[0].column_letter
                 width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 36)
                 sheet.column_dimensions[letter].width = width
-            for row in sheet.iter_rows(min_row=2):
+            for row in sheet.iter_rows(min_row=3):
                 for cell in row:
                     if hasattr(cell.value, "year") and hasattr(cell.value, "month"):
                         cell.number_format = "yyyy-mm-dd"
@@ -1421,7 +1493,9 @@ class AllShopsProfitWorkbookView(OwnerRequiredMixin, View):
             output.getvalue(),
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        response["Content-Disposition"] = 'attachment; filename="all_shops_profit_sheet.xlsx"'
+        response["Content-Disposition"] = (
+            f'attachment; filename="all_shops_profit_{start_date:%Y%m%d}_{end_date:%Y%m%d}.xlsx"'
+        )
         return response
 
 
