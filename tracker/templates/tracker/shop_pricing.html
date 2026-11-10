@@ -5,10 +5,10 @@
 
 {% block content %}
 <div class="mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Shop Pricing</h1>
-    <p class="text-sm text-slate-500">
-        Each shop sells at its own prices. Saving here never changes profit that has
-        already been recorded — sales keep the prices locked in at the time they were made.
+    <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">Settings</p>
+    <h1 class="text-3xl font-bold tracking-tight text-slate-900">Shop pricing</h1>
+    <p class="mt-2 max-w-2xl text-sm text-slate-500">
+        Each shop keeps its own pricing. Select a shop card to open a sheet and update cost, selling price and active status.
     </p>
 </div>
 
@@ -25,86 +25,131 @@
     {% endfor %}
 </div>
 
-<form method="post">
-    {% csrf_token %}
-    {% if current_shop %}
-    <input type="hidden" name="shop" value="{{ current_shop.pk }}">
-    {% endif %}
-
+<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
     {% for shop, shop_products in grouped_products.items %}
-        <div class="mb-6 rounded-xl bg-white shadow">
-            <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <div>
-                    <h2 class="text-base font-semibold text-slate-900">{{ shop.name }}</h2>
-                    <p class="text-xs text-slate-500">{{ shop.location|default:"—" }}</p>
-                </div>
-                <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                    {{ shop_products|length }} product(s)
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900">{{ shop.name }}</h2>
+                <p class="mt-1 text-sm text-slate-500">{{ shop.location|default:"—" }}</p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                {{ shop_products|length }} products
+            </span>
+        </div>
+
+        <div class="mt-4 space-y-2 text-sm text-slate-600">
+            <div class="flex items-center justify-between">
+                <span>Active</span>
+                <span class="font-medium text-slate-900">{{ shop_products|length }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span>Inactive</span>
+                <span class="font-medium text-slate-900">0</span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span>Average margin</span>
+                <span class="font-medium text-emerald-600">
+                    {% with total_profit=0 %}
+                    {% for sp in shop_products %}
+                        {% if forloop.first %}
+                        {{ sp.unit_profit|ksh }}
+                        {% endif %}
+                    {% endfor %}
+                    {% endwith %}
                 </span>
             </div>
+        </div>
 
-            <div class="overflow-x-auto">
+        <button type="button"
+                data-sheet-target="shop-sheet-{{ shop.pk }}"
+                class="sheet-trigger mt-5 inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500">
+            Edit pricing
+        </button>
+    </div>
+    {% empty %}
+    <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800 shadow-sm">
+        No products have been priced for any shop yet. Run <span class="font-mono">python manage.py import_price_list</span> to load them from <span class="font-mono">price list.xlsx</span>, or add them via admin.
+    </div>
+    {% endfor %}
+</div>
+
+{% if grouped_products %}
+    <div class="mt-6 rounded-2xl border border-slate-200 bg-slate-100 p-4 text-sm text-slate-600 shadow-sm">
+        <div class="flex items-center justify-between gap-3">
+            <span>Only the selected shop's prices are updated on save.</span>
+            <span class="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600">
+                {{ grouped_products|length }} shops
+            </span>
+        </div>
+    </div>
+{% endif %}
+
+{% for shop, shop_products in grouped_products.items %}
+<div id="shop-sheet-{{ shop.pk }}" class="sheet fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="absolute inset-0 bg-slate-950/50 backdrop-blur-sm" data-close-sheet="shop-sheet-{{ shop.pk }}"></div>
+    <div class="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Edit</p>
+                <h2 class="mt-1 text-xl font-semibold text-slate-900">{{ shop.name }}</h2>
+            </div>
+            <button type="button" data-close-sheet="shop-sheet-{{ shop.pk }}" class="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-100">
+                ✕
+            </button>
+        </div>
+
+        <form method="post" class="flex flex-1 flex-col">
+            {% csrf_token %}
+            <input type="hidden" name="shop" value="{{ shop.pk }}">
+            <div class="flex-1 overflow-y-auto px-6 py-5">
                 <table class="min-w-full divide-y divide-slate-200 text-sm">
                     <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th class="px-5 py-3 text-left font-semibold">Product</th>
-                            <th class="px-5 py-3 text-left font-semibold">Category</th>
-                            <th class="px-5 py-3 text-right font-semibold">Cost Price</th>
-                            <th class="px-5 py-3 text-right font-semibold">Selling Price</th>
-                            <th class="px-5 py-3 text-right font-semibold">Unit Profit</th>
-                            <th class="px-5 py-3 text-center font-semibold">Active</th>
+                            <th class="px-4 py-3 text-left font-semibold">Product</th>
+                            <th class="px-4 py-3 text-left font-semibold">Category</th>
+                            <th class="px-4 py-3 text-right font-semibold">Cost</th>
+                            <th class="px-4 py-3 text-right font-semibold">Selling</th>
+                            <th class="px-4 py-3 text-right font-semibold">Profit</th>
+                            <th class="px-4 py-3 text-center font-semibold">Active</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         {% for sp in shop_products %}
-                            <tr class="hover:bg-slate-50">
-                                <td class="px-5 py-3 font-medium text-slate-900">{{ sp.product.name }}</td>
-                                <td class="px-5 py-3 text-slate-500">{{ sp.product.category|default:"—" }}</td>
-                                <td class="px-5 py-3 text-right">
-                                    <input type="number" step="0.01" min="0"
-                                           name="shop_product-{{ sp.pk }}-cost_price"
-                                           value="{{ sp.cost_price }}"
-                                           class="price-input w-28 rounded-lg border-slate-300 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                                </td>
-                                <td class="px-5 py-3 text-right">
-                                    <input type="number" step="0.01" min="0"
-                                           name="shop_product-{{ sp.pk }}-selling_price"
-                                           value="{{ sp.selling_price }}"
-                                           class="price-input w-28 rounded-lg border-slate-300 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                                </td>
-                                <td class="px-5 py-3 text-right font-medium text-emerald-600 profit-cell">
-                                    {{ sp.unit_profit|ksh }}
-                                </td>
-                                <td class="px-5 py-3 text-center">
-                                    <input type="checkbox"
-                                           name="shop_product-{{ sp.pk }}-is_active"
-                                           {% if sp.is_active %}checked{% endif %}
-                                           class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
-                                </td>
-                            </tr>
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 font-medium text-slate-900">{{ sp.product.name }}</td>
+                            <td class="px-4 py-3 text-slate-500">{{ sp.product.category|default:"—" }}</td>
+                            <td class="px-4 py-3 text-right">
+                                <input type="number" step="0.01" min="0" name="shop_product-{{ sp.pk }}-cost_price" value="{{ sp.cost_price }}"
+                                       class="price-input w-24 rounded-lg border-slate-300 bg-slate-50 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            </td>
+                            <td class="px-4 py-3 text-right">
+                                <input type="number" step="0.01" min="0" name="shop_product-{{ sp.pk }}-selling_price" value="{{ sp.selling_price }}"
+                                       class="price-input w-24 rounded-lg border-slate-300 bg-slate-50 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            </td>
+                            <td class="profit-cell px-4 py-3 text-right font-medium text-emerald-600">
+                                {{ sp.unit_profit|ksh }}
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                <input type="checkbox" name="shop_product-{{ sp.pk }}-is_active" {% if sp.is_active %}checked{% endif %}
+                                       class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            </td>
+                        </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-        </div>
-    {% empty %}
-        <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
-            No products have been priced for any shop yet.
-            Run <code class="font-mono">python manage.py import_price_list</code> to load them from
-            <code class="font-mono">price list.xlsx</code>, or add them in the admin.
-        </div>
-    {% endfor %}
 
-    {% if grouped_products %}
-        <div class="sticky bottom-0 flex items-center gap-3 border-t border-slate-200 bg-slate-100 py-4">
-            <button type="submit"
-                    class="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
-                Save all prices
-            </button>
-            <span class="text-sm text-slate-500">Untick “Active” to hide a product from a shop's sale form.</span>
-        </div>
-    {% endif %}
-</form>
+            <div class="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-4">
+                <span class="text-sm text-slate-500">Save changes for {{ shop.name }} only.</span>
+                <button type="submit" class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Save prices
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endfor %}
 {% endblock %}
 
 {% block scripts %}
@@ -112,8 +157,6 @@
 (function () {
     "use strict";
 
-    // Update the "unit profit" column live as prices are typed. The server
-    // recalculates everything on save; this is only a convenience.
     const formatKsh = function (value) {
         return "KSh " + Number(value || 0).toLocaleString("en-KE", {
             minimumFractionDigits: 2,
@@ -121,27 +164,55 @@
         });
     };
 
-    document.querySelectorAll("tr").forEach(function (row) {
-        const cost = row.querySelector('input[name$="-cost_price"]');
-        const sell = row.querySelector('input[name$="-selling_price"]');
-        const cell = row.querySelector(".profit-cell");
-        if (!cost || !sell || !cell) { return; }
+    const openSheet = function (sheetId) {
+        const sheet = document.getElementById(sheetId);
+        if (!sheet) return;
+        sheet.classList.remove("hidden");
+        document.body.classList.add("overflow-hidden");
+    };
+
+    const closeSheet = function (sheetId) {
+        const sheet = document.getElementById(sheetId);
+        if (!sheet) return;
+        sheet.classList.add("hidden");
+        document.body.classList.remove("overflow-hidden");
+    };
+
+    document.querySelectorAll(".sheet-trigger").forEach(function (trigger) {
+        trigger.addEventListener("click", function () {
+            openSheet(trigger.dataset.sheetTarget);
+        });
+    });
+
+    document.querySelectorAll("[data-close-sheet]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            closeSheet(button.dataset.closeSheet);
+        });
+    });
+
+    const currentShopFilter = new URLSearchParams(window.location.search).get("shop");
+    if (currentShopFilter) {
+        openSheet("shop-sheet-" + currentShopFilter);
+    }
+
+    document.querySelectorAll(".price-input").forEach(function (input) {
+        const row = input.closest("tr");
+        const cell = row ? row.querySelector(".profit-cell") : null;
+        const costInput = row ? row.querySelector('input[name$="-cost_price"]') : null;
+        const sellingInput = row ? row.querySelector('input[name$="-selling_price"]') : null;
+
+        if (!cell || !costInput || !sellingInput) return;
 
         const refresh = function () {
-            const c = parseFloat(cost.value);
-            const s = parseFloat(sell.value);
-            if (!isFinite(c) || !isFinite(s)) {
-                cell.textContent = "—";
-                return;
-            }
-            const margin = s - c;
-            cell.textContent = formatKsh(margin);
-            cell.className = "px-5 py-3 text-right font-medium profit-cell " +
-                (margin < 0 ? "text-rose-600" : "text-emerald-600");
+            const cost = parseFloat(costInput.value || 0);
+            const sell = parseFloat(sellingInput.value || 0);
+            const delta = sell - cost;
+            cell.textContent = formatKsh(delta);
+            cell.className = "profit-cell px-4 py-3 text-right font-medium " + (delta < 0 ? "text-rose-600" : "text-emerald-600");
         };
 
-        cost.addEventListener("input", refresh);
-        sell.addEventListener("input", refresh);
+        costInput.addEventListener("input", refresh);
+        sellingInput.addEventListener("input", refresh);
     });
 })();
 </script>
