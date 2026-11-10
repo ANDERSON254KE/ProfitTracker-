@@ -55,6 +55,7 @@ BOOTSTRAP_SHOPS = [
     ("Empire Shop", "Empire Shopping Centre, Nairobi"),
     ("Emirates", "Emirates Mall, Nairobi"),
     ("Small City", "Small City, Nairobi"),
+    ("Chambers Point", "Chambers Point, Nairobi"),
 ]
 
 #: Where legacy sales with no recognisable shop are filed.
@@ -250,9 +251,13 @@ def import_legacy_data(apps, schema_editor):
         legacy_prices[row["id"]] = (row["cost_price"], row["selling_price"])
 
     # Per-shop selling-price overrides, keyed by (legacy product id, shop).
+    # A NULL selling_price is a placeholder in the old app, not a real price,
+    # so it is skipped and the product's base price is used instead.
     overrides = {}
     if _table_exists("legacy_productshopprice"):
         for row in _fetch("legacy_productshopprice", "product_id, shop, selling_price"):
+            if row["selling_price"] is None:
+                continue
             overrides[(row["product_id"], (row["shop"] or "").strip())] = row["selling_price"]
 
     # Price every product in every shop, using the override where the old app
