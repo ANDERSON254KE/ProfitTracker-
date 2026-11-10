@@ -700,6 +700,25 @@ class ProductReportTests(BaseDataTestCase):
         )
         # Blue Ice is stocked but has never sold anywhere.
 
+    def test_reports_page_lists_shops_in_daily_profit_sheet_selector(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="open_sheet_shop"')
+        for shop in (self.fig_tree, self.empire):
+            self.assertContains(response, f'value="{shop.pk}">{shop.name}</option>')
+
+    def test_reports_page_opens_the_selected_shop_profit_sheet(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_report"), {"open_sheet_shop": self.empire.pk}
+        )
+        self.assertRedirects(
+            response,
+            reverse("shop_profit_sheet", args=[self.empire.pk]),
+            fetch_redirect_response=False,
+        )
+
     def test_rows_split_each_product_by_shop(self):
         self.client.force_login(self.owner)
         response = self.client.get(reverse("product_report"))

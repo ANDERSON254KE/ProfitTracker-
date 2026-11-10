@@ -1196,6 +1196,13 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
 
     template_name = "tracker/product_report.html"
 
+    def get(self, request, *args, **kwargs):
+        shop_id = request.GET.get("open_sheet_shop")
+        if shop_id:
+            shop = get_object_or_404(Shop, pk=shop_id)
+            return redirect("shop_profit_sheet", shop_pk=shop.pk)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         shops, rows = _product_report_rows()
