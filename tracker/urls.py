@@ -75,6 +75,11 @@ urlpatterns = [
         views.ProductReportCSVView.as_view(),
         name="product_report_csv",
     ),
+    path(
+        "products/report/profit-sheet.xlsx",
+        views.AllShopsProfitWorkbookView.as_view(),
+        name="all_shops_profit_workbook",
+    ),
     # Per-shop report pages (owner dashboard shop cards link here)
     path(
         "shops/<int:pk>/",

@@ -9,7 +9,7 @@ import os
 import tempfile
 from datetime import timedelta
 from decimal import Decimal
-from io import StringIO
+from io import BytesIO, StringIO
 
 import openpyxl
 
@@ -20,7 +20,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import DailySale, MasterProduct, Shop, ShopProduct
+from tracker.models import DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
 from tracker.templatetags.money import ksh, signed_ksh, units
 
 CustomUser = get_user_model()
@@ -705,6 +705,7 @@ class ProductReportTests(BaseDataTestCase):
         response = self.client.get(reverse("product_report"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'name="open_sheet_shop"')
+        self.assertContains(response, reverse("all_shops_profit_workbook"))
         for shop in (self.fig_tree, self.empire):
             self.assertContains(response, f'value="{shop.pk}">{shop.name}</option>')
 
@@ -772,6 +773,51 @@ class ProductReportTests(BaseDataTestCase):
     def test_csv_export_refuses_a_manager(self):
         self.client.force_login(self.fig_manager)
         self.assertEqual(self.client.get(reverse("product_report_csv")).status_code, 403)
+
+    def test_all_shops_profit_workbook_includes_sales_and_expense_net_profit(self):
+        expense_day = timezone.localdate() - timedelta(days=1)
+        ShopExpense.objects.create(
+            shop=self.fig_tree,
+            expense_date=expense_day,
+            description="Transport",
+            amount=Decimal("50.00"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("all_shops_profit_workbook"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
+        self.assertEqual(
+            workbook.sheetnames,
+            ["Shop Summary", "Product Sales", "Expenses", "Daily Net Profit"],
+        )
+        summary = list(workbook["Shop Summary"].values)
+        fig_tree_row = next(row for row in summary if row[0] == "Fig Tree")
+        self.assertEqual(fig_tree_row[4], Decimal("200.00"))
+        self.assertEqual(fig_tree_row[5], Decimal("50.00"))
+        self.assertEqual(fig_tree_row[6], Decimal("150.00"))
+        expense_row = next(row for row in list(workbook["Expenses"].values)[1:] if row[2] == "Transport")
+        self.assertEqual(expense_row[0].date(), expense_day)
+        self.assertEqual(expense_row[1], "Fig Tree")
+        self.assertEqual(expense_row[3], 50)
+        self.assertEqual(expense_row[4], "figtree")
+
+        daily_row = next(
+            row for row in list(workbook["Daily Net Profit"].values)[1:]
+            if row[0].date() == expense_day and row[1] == "Fig Tree"
+        )
+        self.assertEqual(daily_row[6], 50)
+        self.assertEqual(daily_row[7], -50)
+
+    def test_all_shops_profit_workbook_refuses_a_manager(self):
+        self.client.force_login(self.fig_manager)
+        self.assertEqual(
+            self.client.get(reverse("all_shops_profit_workbook")).status_code, 403
+        )
 
 
 class ShopPricingTests(BaseDataTestCase):

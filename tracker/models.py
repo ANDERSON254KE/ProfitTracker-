@@ -373,6 +373,9 @@ class ShopExpense(models.Model):
     """An expense entered for one shop on a specific trading day."""
 
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="expenses")
+    legacy_source_id = models.PositiveBigIntegerField(
+        null=True, blank=True, unique=True, editable=False
+    )
     expense_date = LocalDateField("Expense Date", default=timezone.localdate, db_index=True)
     description = models.CharField("Description", max_length=200)
     amount = models.DecimalField(

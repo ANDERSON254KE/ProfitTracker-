@@ -29,10 +29,16 @@
         </div>
         <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Open profit sheet</button>
     </form>
-    <a href="{{ csv_export_url }}" download
-       class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
-        CSV Export
-    </a>
+    <div class="flex flex-wrap gap-2">
+        <a href="{% url 'all_shops_profit_workbook' %}" download
+           class="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600">
+            Download all-shops profit sheet
+        </a>
+        <a href="{{ csv_export_url }}" download
+           class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
+            CSV Export
+        </a>
+    </div>
 </div>
 
 <div class="overflow-hidden rounded-xl bg-white shadow">
