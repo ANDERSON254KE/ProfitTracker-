@@ -7,7 +7,7 @@ single source of truth for profit stays :meth:`tracker.models.DailySale.save`.
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import CustomUser, DailySale, MasterProduct, Shop, ShopProduct
+from .models import CustomUser, DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
 
 
 @admin.register(CustomUser)
@@ -81,3 +81,14 @@ class DailySaleAdmin(admin.ModelAdmin):
     date_hierarchy = "sale_date"
     readonly_fields = ("total_revenue", "total_cost", "profit", "sale_date", "created_at")
     autocomplete_fields = ("product",)
+
+
+@admin.register(ShopExpense)
+class ShopExpenseAdmin(admin.ModelAdmin):
+    """Shop-scoped expense ledger for administration and corrections."""
+
+    list_display = ("expense_date", "shop", "description", "amount", "recorded_by")
+    list_filter = ("shop", "expense_date")
+    search_fields = ("description", "recorded_by__username")
+    date_hierarchy = "expense_date"
+    readonly_fields = ("created_at",)

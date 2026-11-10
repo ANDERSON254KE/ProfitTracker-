@@ -1,0 +1,157 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}{{ shop.name }} Profit Sheet · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+    <div>
+        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">Daily close</p>
+        <h1 class="text-3xl font-bold tracking-tight text-slate-900">{{ shop.name }} profit sheet</h1>
+        <p class="mt-1 text-sm text-slate-500">Enter units sold and record this shop's expenses.</p>
+    </div>
+    <form method="get" class="flex flex-wrap items-end gap-2">
+        <div>
+            <label for="sheetDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Trading date</label>
+            <input id="sheetDate" name="date" type="date" value="{{ selected_date }}"
+                   class="rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+        </div>
+        <button type="submit" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">View date</button>
+    </form>
+</div>
+
+{% if errors %}
+<div class="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+    <ul class="list-inside list-disc space-y-1">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue</p>
+        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_revenue|ksh }}</p>
+        <p class="mt-1 text-xs text-slate-500">{{ day_units|units }} units sold</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Product cost</p>
+        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_cost|ksh }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gross profit</p>
+        <p class="mt-2 text-xl font-bold {% if gross_profit < 0 %}text-rose-600{% else %}text-emerald-700{% endif %}">{{ gross_profit|ksh }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Expenses</p>
+        <p class="mt-2 text-xl font-bold text-rose-600">{{ expense_total|ksh }}</p>
+    </div>
+    <div class="col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm md:col-span-1">
+        <p class="text-xs font-semibold uppercase tracking-wide text-emerald-800">Net profit</p>
+        <p class="mt-2 text-xl font-bold {% if net_profit < 0 %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ net_profit|ksh }}</p>
+        <p class="mt-1 text-xs text-emerald-800">Gross profit less expenses</p>
+    </div>
+</div>
+
+<section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">Units sold by product</h2>
+            <p class="mt-1 text-sm text-slate-500">Prices use this shop's saved price list. Profit is calculated when saved.</p>
+        </div>
+        <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ selected_date }}</span>
+    </div>
+    {% if has_products %}
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="date" value="{{ selected_date }}">
+        <input type="hidden" name="action" value="save_sales">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-4 py-3 text-left font-semibold">Product</th>
+                        <th class="px-4 py-3 text-right font-semibold">Cost</th>
+                        <th class="px-4 py-3 text-right font-semibold">Selling price</th>
+                        <th class="px-4 py-3 text-right font-semibold">Units sold</th>
+                        <th class="px-4 py-3 text-right font-semibold">Profit / unit</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in rows %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-4 py-3 font-medium text-slate-900">{{ row.card.product.name }} <span class="text-xs font-normal text-slate-500">{{ row.card.product.category }}</span>
+                            {% if row.stock_entry %}<span class="ml-1 text-xs text-amber-700">Stock sheet entry</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right text-slate-600">{{ row.card.cost_price|ksh }}</td>
+                        <td class="px-4 py-3 text-right text-slate-600">{{ row.card.selling_price|ksh }}</td>
+                        <td class="px-4 py-3 text-right">
+                            <input type="number" name="units_{{ row.card.product_id }}" inputmode="decimal" min="0" step="0.01" value="{{ row.units }}"
+                                   {% if row.stock_entry %}disabled{% endif %}
+                                   class="w-28 rounded-lg border-slate-300 bg-slate-50 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50">
+                        </td>
+                        <td class="px-4 py-3 text-right font-medium {% if row.card.unit_profit < 0 %}text-rose-600{% else %}text-emerald-700{% endif %}">{{ row.card.unit_profit|ksh }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
+            <p class="text-sm text-slate-500">Blank quantities stay unchanged; enter 0 to clear a saved manual quantity.</p>
+            <button type="submit" class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Save quantities</button>
+        </div>
+    </form>
+    {% else %}
+    <p class="p-6 text-sm text-slate-500">No active, priced products are available for this shop.</p>
+    {% endif %}
+</section>
+
+<div class="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 class="text-base font-semibold text-slate-900">Add an expense</h2>
+        <form method="post" class="mt-4 space-y-3">
+            {% csrf_token %}
+            <input type="hidden" name="date" value="{{ selected_date }}">
+            <input type="hidden" name="action" value="add_expense">
+            <div>
+                <label for="expenseDescription" class="mb-1 block text-sm font-medium text-slate-700">Description</label>
+                <input id="expenseDescription" name="description" maxlength="200" value="{{ expense_description }}" required placeholder="Transport, rent, supplies..."
+                       class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="expenseAmount" class="mb-1 block text-sm font-medium text-slate-700">Amount (KSh)</label>
+                <input id="expenseAmount" name="amount" type="number" min="0.01" step="0.01" value="{{ expense_amount }}" required
+                       class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <button type="submit" class="inline-flex items-center rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700">Add expense</button>
+        </form>
+    </section>
+
+    <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <h2 class="text-base font-semibold text-slate-900">Expenses for {{ selected_date }}</h2>
+            <span class="text-sm font-semibold text-rose-600">{{ expense_total|ksh }}</span>
+        </div>
+        <div class="divide-y divide-slate-100">
+            {% for expense in expenses %}
+            <div class="flex items-center justify-between gap-3 px-5 py-3">
+                <div class="min-w-0">
+                    <p class="truncate text-sm font-medium text-slate-900">{{ expense.description }}</p>
+                    <p class="text-xs text-slate-500">{{ expense.recorded_by.username }}</p>
+                </div>
+                <div class="flex shrink-0 items-center gap-3">
+                    <span class="text-sm font-semibold text-slate-700">{{ expense.amount|ksh }}</span>
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="date" value="{{ selected_date }}">
+                        <input type="hidden" name="action" value="delete_expense">
+                        <input type="hidden" name="expense_id" value="{{ expense.pk }}">
+                        <button type="submit" aria-label="Remove {{ expense.description }}" title="Remove expense" class="rounded-md px-2 py-1 text-sm font-medium text-rose-600 hover:bg-rose-50">Remove</button>
+                    </form>
+                </div>
+            </div>
+            {% empty %}
+            <p class="px-5 py-6 text-sm text-slate-500">No expenses recorded for this date.</p>
+            {% endfor %}
+        </div>
+    </section>
+</div>
+{% endblock %}

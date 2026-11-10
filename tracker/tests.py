@@ -636,6 +636,52 @@ class ProductComparisonFeatureTests(BaseDataTestCase):
         self.assertEqual(response.context["selected_shop"], self.empire)
         self.assertEqual(response.context["comparison_data"][0]["total_profit"], Decimal("1500.00"))
 
+    def test_selected_date_range_filters_comparison_totals_and_trend(self):
+        today = timezone.localdate()
+        old_sale = DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("1"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.filter(pk=old_sale.pk).update(sale_date=today - timedelta(days=10))
+
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_comparison"),
+            {
+                "product_a": self.gilbeys.pk,
+                "product_b": self.blue_ice.pk,
+                "start_date": (today - timedelta(days=1)).isoformat(),
+                "end_date": today.isoformat(),
+            },
+        )
+
+        gilbeys = response.context["comparison_data"][0]
+        self.assertEqual(gilbeys["total_profit"], Decimal("1700.00"))
+        self.assertEqual(response.context["chart_data"]["labels"], [
+            (today - timedelta(days=1)).strftime("%d %b %Y"),
+            today.strftime("%d %b %Y"),
+        ])
+        self.assertEqual(response.context["chart_data"]["datasets"][0]["data"], [0.0, 1700.0])
+
+    def test_comparison_csv_uses_the_selected_shop_and_dates(self):
+        today = timezone.localdate()
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_comparison_csv"),
+            {
+                "product_a": self.gilbeys.pk,
+                "shop": self.fig_tree.pk,
+                "start_date": today.isoformat(),
+                "end_date": today.isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        csv_text = response.content.decode()
+        self.assertIn("Product,Category,Shop,From,To,Units,Revenue,Profit", csv_text)
+        self.assertIn(f"Gilbeys,250ml,Fig Tree,{today.isoformat()},{today.isoformat()},2.00,1100.00,200.00", csv_text)
+        self.assertNotIn("Empire Shop", csv_text)
+
 
 class ProductReportTests(BaseDataTestCase):
     """The all-products cross-shop report page and its CSV export."""
@@ -748,6 +794,117 @@ class ShopPricingTests(BaseDataTestCase):
         self.assertEqual(response.status_code, 403)
         card.refresh_from_db()
         self.assertEqual(card.cost_price, Decimal("450.00"))
+
+
+class ShopProfitSheetTests(BaseDataTestCase):
+    """Manual daily quantities and expense deductions stay shop-scoped."""
+
+    def test_manager_records_units_and_expense_for_own_shop_and_date(self):
+        self.client.force_login(self.fig_manager)
+        day = timezone.localdate() - timedelta(days=2)
+        url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        response = self.client.post(
+            url,
+            {"date": day.isoformat(), "action": "save_sales", f"units_{self.gilbeys.pk}": "4"},
+        )
+        self.assertRedirects(response, f"{url}?date={day.isoformat()}")
+
+        sale = DailySale.objects.get(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+            is_profit_sheet_entry=True,
+        )
+        self.assertEqual(sale.units_sold, Decimal("4"))
+        self.assertEqual(sale.total_revenue, Decimal("2200.00"))
+        self.assertEqual(sale.profit, Decimal("400.00"))
+
+        self.client.post(
+            url,
+            {
+                "date": day.isoformat(), "action": "add_expense",
+                "description": "Transport", "amount": "75.00",
+            },
+        )
+        response = self.client.get(url, {"date": day.isoformat()})
+        self.assertEqual(response.context["gross_profit"], Decimal("400.00"))
+        self.assertEqual(response.context["expense_total"], Decimal("75.00"))
+        self.assertEqual(response.context["net_profit"], Decimal("325.00"))
+
+    def test_manual_quantities_update_instead_of_double_counting(self):
+        self.client.force_login(self.fig_manager)
+        day = timezone.localdate()
+        url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        for quantity in ("4", "2"):
+            self.client.post(
+                url,
+                {"date": day.isoformat(), "action": "save_sales", f"units_{self.gilbeys.pk}": quantity},
+            )
+        self.assertEqual(
+            DailySale.objects.filter(shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+                                     is_profit_sheet_entry=True).count(),
+            1,
+        )
+        self.assertEqual(
+            DailySale.objects.get(shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+                                  is_profit_sheet_entry=True).profit,
+            Decimal("200.00"),
+        )
+
+    def test_manager_cannot_write_to_another_shop(self):
+        self.client.force_login(self.fig_manager)
+        day = timezone.localdate()
+        other_shop_url = reverse("shop_profit_sheet", args=[self.empire.pk])
+        self.client.post(
+            other_shop_url,
+            {"date": day.isoformat(), "action": "save_sales", f"units_{self.gilbeys.pk}": "3"},
+        )
+        self.assertTrue(
+            DailySale.objects.filter(shop=self.fig_tree, product=self.gilbeys,
+                                     is_profit_sheet_entry=True).exists()
+        )
+        self.assertFalse(
+            DailySale.objects.filter(shop=self.empire, product=self.gilbeys,
+                                     is_profit_sheet_entry=True).exists()
+        )
+
+    def test_owner_can_open_and_record_for_the_selected_shop(self):
+        self.client.force_login(self.owner)
+        day = timezone.localdate()
+        url = reverse("shop_profit_sheet", args=[self.empire.pk])
+        response = self.client.get(url, {"date": day.isoformat()})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["shop"], self.empire)
+        self.client.post(
+            url,
+            {"date": day.isoformat(), "action": "save_sales", f"units_{self.gilbeys.pk}": "2"},
+        )
+        self.assertTrue(
+            DailySale.objects.filter(shop=self.empire, product=self.gilbeys,
+                                     is_profit_sheet_entry=True).exists()
+        )
+
+    def test_manual_entry_is_rejected_if_stock_sheet_already_has_product(self):
+        stock_sale = DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            units_sold=Decimal("1"),
+            total_stock=Decimal("10"),
+            closing_stock=Decimal("9"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
+            {
+                "date": stock_sale.sale_date.isoformat(),
+                "action": "save_sales",
+                f"units_{self.gilbeys.pk}": "3",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            DailySale.objects.filter(shop=self.fig_tree, product=self.gilbeys,
+                                     is_profit_sheet_entry=True).exists()
+        )
 
 
 class DailySalesSheetTests(BaseDataTestCase):

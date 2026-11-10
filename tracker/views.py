@@ -12,7 +12,7 @@ computed by the model.
 """
 
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from io import StringIO
 from urllib.parse import urlencode
 import csv
@@ -22,11 +22,13 @@ from django.contrib.auth import login
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.views.generic import CreateView, DetailView, RedirectView, TemplateView, View
 
 from .forms import DailySaleForm, DailySalesSheetForm, ShopPricingForm
@@ -36,7 +38,7 @@ from .mixins import (
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
 )
-from .models import CustomUser, DailySale, MasterProduct, Shop, ShopProduct
+from .models import CustomUser, DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
 from .price_list import price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
@@ -62,6 +64,14 @@ def _money(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _parse_date(value):
+    """Parse an ISO date query value, returning ``None`` for invalid input."""
+    try:
+        return parse_date(value or "")
+    except (TypeError, ValueError):
+        return None
 
 
 def _shop_sales(shop):
@@ -503,6 +513,184 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         return redirect("daily_sales_sheet")
 
 
+class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateView):
+    """Record one shop's daily product quantities and expenses."""
+
+    template_name = "tracker/shop_profit_sheet.html"
+
+    def _selected_date(self, raw):
+        return _parse_date(raw) or timezone.localdate()
+
+    def _build_context(self, day, posted=None):
+        posted = posted or {}
+        cards = ShopProduct.objects.filter(
+            shop=self.shop, is_active=True, cost_price__gt=0
+        ).select_related("product").order_by("product__name", "product__category")
+        manual_sales = {
+            sale.product_id: sale
+            for sale in DailySale.objects.filter(
+                shop=self.shop, sale_date=day, is_profit_sheet_entry=True
+            )
+        }
+        stock_products = set(
+            DailySale.objects.filter(
+                shop=self.shop, sale_date=day, total_stock__isnull=False
+            ).values_list("product_id", flat=True)
+        )
+        rows = []
+        for card in cards:
+            entry = manual_sales.get(card.product_id)
+            rows.append({
+                "card": card,
+                "entry": entry,
+                "units": posted.get(f"units_{card.product_id}", _input_value(entry.units_sold if entry else None)),
+                "stock_entry": card.product_id in stock_products,
+            })
+
+        sales_totals = DailySale.objects.filter(shop=self.shop, sale_date=day).aggregate(
+            revenue=Sum("total_revenue"), cost=Sum("total_cost"), profit=Sum("profit"), units=Sum("units_sold")
+        )
+        expenses = list(ShopExpense.objects.filter(shop=self.shop, expense_date=day))
+        expense_total = sum((expense.amount for expense in expenses), Decimal("0.00"))
+        gross_profit = _money(sales_totals["profit"])
+        return {
+            "shop": self.shop,
+            "selected_date": day.isoformat(),
+            "rows": rows,
+            "expenses": expenses,
+            "expense_description": posted.get("description", ""),
+            "expense_amount": posted.get("amount", ""),
+            "day_revenue": _money(sales_totals["revenue"]),
+            "day_cost": _money(sales_totals["cost"]),
+            "day_units": _money(sales_totals["units"]),
+            "gross_profit": gross_profit,
+            "expense_total": expense_total,
+            "net_profit": gross_profit - expense_total,
+            "has_products": bool(rows),
+        }
+
+    def get(self, request, *args, **kwargs):
+        day = self._selected_date(request.GET.get("date"))
+        return self.render_to_response(self._build_context(day))
+
+    def post(self, request, *args, **kwargs):
+        day = self._selected_date(request.POST.get("date"))
+        action = request.POST.get("action")
+        redirect_url = f"{reverse('shop_profit_sheet', args=[self.shop.pk])}?date={day.isoformat()}"
+
+        if action == "add_expense":
+            description = request.POST.get("description", "").strip()
+            try:
+                amount = Decimal(request.POST.get("amount", "").strip())
+            except (InvalidOperation, AttributeError):
+                amount = None
+            errors = []
+            if not description:
+                errors.append("Enter an expense description.")
+            if (
+                amount is None
+                or not amount.is_finite()
+                or amount <= 0
+                or amount > Decimal("999999999999.99")
+                or amount.as_tuple().exponent < -2
+            ):
+                errors.append("Enter an expense amount greater than zero with up to two decimal places.")
+            if errors:
+                context = self._build_context(day, request.POST)
+                context["errors"] = errors
+                return self.render_to_response(context, status=400)
+            ShopExpense.objects.create(
+                shop=self.shop,
+                expense_date=day,
+                description=description,
+                amount=amount,
+                recorded_by=request.user,
+            )
+            messages.success(request, "Expense added to this shop's profit sheet.")
+            return redirect(redirect_url)
+
+        if action == "delete_expense":
+            try:
+                expense_id = int(request.POST.get("expense_id", ""))
+            except ValueError:
+                expense_id = None
+            if expense_id is not None:
+                ShopExpense.objects.filter(
+                    pk=expense_id, shop=self.shop, expense_date=day
+                ).delete()
+            messages.success(request, "Expense removed from this shop's profit sheet.")
+            return redirect(redirect_url)
+
+        cards = list(ShopProduct.objects.filter(
+            shop=self.shop, is_active=True, cost_price__gt=0
+        ).select_related("product"))
+        existing_sales = {
+            sale.product_id: sale
+            for sale in DailySale.objects.filter(
+                shop=self.shop, sale_date=day, is_profit_sheet_entry=True
+            )
+        }
+        stock_products = set(
+            DailySale.objects.filter(
+                shop=self.shop, sale_date=day, total_stock__isnull=False
+            ).values_list("product_id", flat=True)
+        )
+        updates = []
+        errors = []
+        for card in cards:
+            key = f"units_{card.product_id}"
+            raw = request.POST.get(key)
+            if raw is None:
+                continue
+            raw = raw.strip()
+            previous = existing_sales.get(card.product_id)
+            if raw == "":
+                continue
+            try:
+                units = Decimal(raw)
+            except InvalidOperation:
+                errors.append(f"Enter a valid quantity for {card.product}.")
+                continue
+            if (
+                not units.is_finite()
+                or units < 0
+                or units > Decimal("9999999999.99")
+                or units.as_tuple().exponent < -2
+            ):
+                errors.append(f"Quantity for {card.product} must be non-negative with up to two decimal places.")
+                continue
+            if card.product_id in stock_products:
+                errors.append(f"{card.product} already has a stock-sheet entry for this date.")
+                continue
+            if previous is not None or units > 0:
+                updates.append((card, previous, units))
+
+        if errors:
+            context = self._build_context(day, request.POST)
+            context["errors"] = errors
+            return self.render_to_response(context, status=400)
+
+        with transaction.atomic():
+            for card, sale, units in updates:
+                if sale is None:
+                    sale = DailySale(
+                        shop=self.shop,
+                        product=card.product,
+                        sale_date=day,
+                        units_sold=units,
+                        unit_cost_at_sale=card.cost_price,
+                        unit_price_at_sale=card.selling_price,
+                        is_profit_sheet_entry=True,
+                        recorded_by=request.user,
+                    )
+                else:
+                    sale.units_sold = units
+                sale.save()
+
+        messages.success(request, "Product quantities saved. Profit totals include this shop's recorded expenses.")
+        return redirect(redirect_url)
+
+
 class ShopPricingView(OwnerRequiredMixin, View):
     """Owner-only inline editor for every shop's price card.
 
@@ -679,10 +867,19 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
         except (Shop.DoesNotExist, ValueError):
             return None
 
+    def _selected_date_range(self, today):
+        end_date = _parse_date(self.request.GET.get("end_date")) or today
+        start_date = _parse_date(self.request.GET.get("start_date"))
+        if start_date is None:
+            start_date = end_date - timedelta(days=OWNER_TREND_DAYS - 1)
+        if start_date > end_date:
+            start_date = end_date - timedelta(days=OWNER_TREND_DAYS - 1)
+        return start_date, end_date
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         today = timezone.localdate()
-        window_start = today - timedelta(days=OWNER_TREND_DAYS - 1)
+        start_date, end_date = self._selected_date_range(today)
 
         all_shops = list(Shop.objects.all().order_by("name"))
         selected_shop = self._selected_shop()
@@ -697,6 +894,8 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
         context["selected_product_b_name"] = ""
         context["selected_shop"] = selected_shop
         context["scope_name"] = selected_shop.name if selected_shop else "All shops"
+        context["start_date"] = start_date.isoformat()
+        context["end_date"] = end_date.isoformat()
         context["comparison_data"] = []
         context["chart_data"] = None
         context["today"] = today
@@ -724,6 +923,7 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
             return context
 
         sales = DailySale.objects.filter(product_id__in=product_ids).select_related("product", "shop")
+        sales = sales.filter(sale_date__range=(start_date, end_date))
         if selected_shop is not None:
             sales = sales.filter(shop=selected_shop)
 
@@ -808,23 +1008,25 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
             "revenue": sum((p["total_revenue"] for p in ordered_products), Decimal("0.00")),
         }
 
-        trend_days = [window_start + timedelta(days=i) for i in range(OWNER_TREND_DAYS)]
+        date_count = (end_date - start_date).days + 1
+        trend_days = [start_date + timedelta(days=i) for i in range(date_count)]
+        daily_profit = {
+            (row["product_id"], row["sale_date"]): _money(row["profit"])
+            for row in sales.values("product_id", "sale_date").annotate(profit=Sum("profit"))
+        }
         datasets = []
         for product in ordered_products:
-            values = []
-            for day in trend_days:
-                per_day = sales.filter(product_id=product["product_id"], sale_date=day).aggregate(
-                    profit=Sum("profit"), units=Sum("units_sold")
-                )
-                values.append(float(_money(per_day["profit"] or Decimal("0.00"))))
             datasets.append(
                 {
                     "label": f"{product['product_name']} ({product['product_category'] or 'No category'})",
-                    "data": values,
+                    "data": [
+                        float(daily_profit.get((product["product_id"], day), Decimal("0.00")))
+                        for day in trend_days
+                    ],
                 }
             )
         context["chart_data"] = {
-            "labels": [day.strftime("%d %b") for day in trend_days],
+            "labels": [day.strftime("%d %b %Y") for day in trend_days],
             "datasets": datasets,
         }
 
@@ -834,6 +1036,8 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
                 "product_a": context["selected_product_a"],
                 "product_b": context["selected_product_b"],
                 "shop": selected_shop.pk if selected_shop else "",
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
             },
             doseq=True,
         )
@@ -881,7 +1085,55 @@ class ProductComparisonCSVView(OwnerRequiredMixin, View):
         if selected_shop is not None:
             product_ids = list(dict.fromkeys(product_ids))[:2]
 
-        return ProductComparisonView().get_csv_response(product_ids)
+        today = timezone.localdate()
+        end_date = _parse_date(request.GET.get("end_date")) or today
+        start_date = _parse_date(request.GET.get("start_date"))
+        if start_date is None:
+            start_date = end_date - timedelta(days=OWNER_TREND_DAYS - 1)
+        if start_date > end_date:
+            start_date = end_date - timedelta(days=OWNER_TREND_DAYS - 1)
+
+        shops = [selected_shop] if selected_shop else list(Shop.objects.all().order_by("name"))
+        totals = {
+            (row["product_id"], row["shop_id"]): row
+            for row in DailySale.objects.filter(
+                product_id__in=product_ids,
+                shop_id__in=[shop.pk for shop in shops],
+                sale_date__range=(start_date, end_date),
+            ).values("product_id", "shop_id").annotate(
+                units=Sum("units_sold"),
+                revenue=Sum("total_revenue"),
+                profit=Sum("profit"),
+            )
+        }
+
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = (
+            f'attachment; filename="product-comparison-{start_date:%Y%m%d}-{end_date:%Y%m%d}.csv"'
+        )
+        writer = csv.writer(response)
+        writer.writerow(["Product", "Category", "Shop", "From", "To", "Units", "Revenue", "Profit"])
+        products = {
+            product.pk: product
+            for product in MasterProduct.objects.filter(pk__in=product_ids)
+        }
+        for product_id in product_ids:
+            product = products.get(product_id)
+            if product is None:
+                continue
+            for shop in shops:
+                row = totals.get((product_id, shop.pk), {})
+                writer.writerow([
+                    product.name,
+                    product.category,
+                    shop.name,
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                    f"{_money(row.get('units')):.2f}",
+                    f"{_money(row.get('revenue')):.2f}",
+                    f"{_money(row.get('profit')):.2f}",
+                ])
+        return response
 
 
 def _product_report_rows():

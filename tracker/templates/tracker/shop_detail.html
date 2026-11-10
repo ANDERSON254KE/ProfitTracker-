@@ -11,6 +11,10 @@
         <p class="text-sm text-slate-500">{{ shop.location|default:"—" }} · {{ day_count }} trading day(s)</p>
     </div>
     <div class="flex gap-2">
+        <a href="{% url 'shop_profit_sheet' shop.pk %}"
+           class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+            Profit Sheet
+        </a>
         <a href="{{ pricing_url }}"
            class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
             Manage Pricing

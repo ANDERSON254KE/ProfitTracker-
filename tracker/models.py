@@ -188,13 +188,20 @@ class DailySale(models.Model):
       cost and profit then follow from the locked-in prices as usual.
     * **Plain entry** (``total_stock`` is NULL) -- written by the single-product
       sale form, where ``units_sold`` is supplied directly.
+        * **Profit-sheet entry** (``is_profit_sheet_entry`` is true) -- one
+            consolidated manual quantity per shop, product and selected date.
     """
 
     shop = models.ForeignKey(Shop, on_delete=models.PROTECT, related_name="sales")
     product = models.ForeignKey(
         MasterProduct, on_delete=models.PROTECT, related_name="daily_sales"
     )
-    sale_date = LocalDateField("Sale Date", auto_now_add=True, db_index=True)
+    sale_date = LocalDateField("Sale Date", default=timezone.localdate, db_index=True)
+    is_profit_sheet_entry = models.BooleanField(
+        "Profit Sheet Entry",
+        default=False,
+        help_text="Marks the consolidated manual units entry for a shop, product and day.",
+    )
     units_sold = models.DecimalField(
         "Units Sold",
         max_digits=12,
@@ -262,6 +269,13 @@ class DailySale(models.Model):
     class Meta:
         ordering = ["-sale_date", "-id"]
         indexes = [models.Index(fields=["shop", "-sale_date"], name="dailysale_shop_date_idx")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shop", "product", "sale_date"],
+                condition=models.Q(is_profit_sheet_entry=True),
+                name="unique_profit_sheet_sale_per_shop_product_day",
+            )
+        ]
 
     @property
     def is_stock_entry(self) -> bool:
@@ -353,3 +367,25 @@ class DailySale(models.Model):
 
     def __str__(self) -> str:
         return f"{self.product} x{self.units_sold} at {self.shop} on {self.sale_date}"
+
+
+class ShopExpense(models.Model):
+    """An expense entered for one shop on a specific trading day."""
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="expenses")
+    expense_date = LocalDateField("Expense Date", default=timezone.localdate, db_index=True)
+    description = models.CharField("Description", max_length=200)
+    amount = models.DecimalField(
+        "Amount", max_digits=14, decimal_places=2, validators=MONEY_VALIDATORS
+    )
+    recorded_by = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="recorded_expenses"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-expense_date", "-created_at"]
+        indexes = [models.Index(fields=["shop", "-expense_date"], name="expense_shop_date_idx")]
+
+    def __str__(self) -> str:
+        return f"{self.description}: {self.amount} at {self.shop} on {self.expense_date}"

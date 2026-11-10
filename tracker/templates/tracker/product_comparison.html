@@ -14,7 +14,7 @@
     </div>
 
     <form method="get" class="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-slate-100">
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div>
                 <label for="productA" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
                     Product A
@@ -46,6 +46,22 @@
                     </option>
                     {% endfor %}
                 </select>
+            </div>
+
+            <div>
+                <label for="startDate" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    From
+                </label>
+                <input id="startDate" name="start_date" type="date" value="{{ start_date }}"
+                       class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
+            </div>
+
+            <div>
+                <label for="endDate" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    To
+                </label>
+                <input id="endDate" name="end_date" type="date" value="{{ end_date }}"
+                       class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
             </div>
         </div>
 
@@ -92,8 +108,10 @@
 {% if chart_data and chart_data.datasets %}
 <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-100">
     <div class="mb-4 flex items-center justify-between">
-        <h2 class="text-base font-semibold text-slate-900">7-day profit trend</h2>
-        <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{{ scope_name }}</span>
+                <h2 class="text-base font-semibold text-slate-900">Profit trend</h2>
+                <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+                    {{ start_date }} to {{ end_date }} · {{ scope_name }}
+                </span>
     </div>
     <div class="h-80">
         <canvas id="productComparisonChart"></canvas>

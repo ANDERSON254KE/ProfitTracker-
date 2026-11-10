@@ -42,6 +42,11 @@ urlpatterns = [
         views.DailySalesSheetView.as_view(),
         name="daily_sales_sheet",
     ),
+    path(
+        "shops/<int:shop_pk>/profit-sheet/",
+        views.ShopProfitSheetView.as_view(),
+        name="shop_profit_sheet",
+    ),
     # JSON helper for the live profit preview
     path(
         "api/shop-product-price/<int:product_id>/",
