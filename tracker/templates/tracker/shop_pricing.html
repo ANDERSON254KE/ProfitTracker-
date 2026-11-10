@@ -88,7 +88,7 @@
 {% for shop, shop_products in grouped_products.items %}
 <div id="shop-sheet-{{ shop.pk }}" class="sheet fixed inset-0 z-50 hidden" aria-hidden="true">
     <div class="absolute inset-0 bg-slate-950/50 backdrop-blur-sm" data-close-sheet="shop-sheet-{{ shop.pk }}"></div>
-    <div class="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col border-l border-slate-200 bg-white shadow-2xl">
+    <div class="absolute right-0 top-0 flex h-full w-full max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl sm:max-w-3xl">
         <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Edit</p>
@@ -102,8 +102,9 @@
         <form method="post" class="flex flex-1 flex-col">
             {% csrf_token %}
             <input type="hidden" name="shop" value="{{ shop.pk }}">
-            <div class="flex-1 overflow-y-auto px-6 py-5">
-                <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <div class="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-6 sm:py-5">
+                <div class="overflow-x-auto max-w-full">
+                <table class="min-w-[640px] max-w-full divide-y divide-slate-200 text-sm">
                     <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                         <tr>
                             <th class="px-4 py-3 text-left font-semibold">Product</th>
@@ -138,6 +139,7 @@
                         {% endfor %}
                     </tbody>
                 </table>
+                </div>
             </div>
 
             <div class="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-4">

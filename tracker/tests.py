@@ -370,6 +370,13 @@ class PageRenderTests(BaseDataTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Gilbeys")
 
+    def test_pricing_page_uses_responsive_table_wrappers(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_pricing"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "overflow-x-auto")
+        self.assertContains(response, "max-w-full")
+
     def test_owner_sees_a_shop_with_no_sales_without_erroring(self):
         """Every shop gets a column in the 7-day table, even an empty one."""
         self.client.force_login(self.owner)
