@@ -925,6 +925,49 @@ class ShopProfitSheetTests(BaseDataTestCase):
                                      is_profit_sheet_entry=True).exists()
         )
 
+    def test_profit_sheet_groups_products_by_price_list_category(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
+        groups = response.context["category_groups"]
+        self.assertEqual(groups[0]["category"], "250ml")
+        self.assertEqual(
+            {row["card"].product.category for row in groups[0]["rows"]},
+            {"250ml"},
+        )
+        self.assertContains(response, ">250ml</h3>")
+
+
+class PriceListCatalogueSyncTests(BaseDataTestCase):
+    """New workbook products are added without changing shop price overrides."""
+
+    def test_sync_adds_new_products_and_leaves_existing_shop_prices_untouched(self):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(["Product", "Cost Price", "Selling Price", "Category"])
+        sheet.append(["Brand 350ml", None, None, None])
+        sheet.append(["Jameson", None, None, "350ml"])
+        sheet.append(["pilsner bottle", None, None, None])
+        sheet.append(["Blue Ice", "999", "1200", "250ml"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "price list.xlsx")
+            workbook.save(path)
+            workbook.close()
+            call_command("sync_price_list_catalogue", file=path, verbosity=0)
+
+        self.assertTrue(MasterProduct.objects.filter(name="Jameson", category="350ml").exists())
+        self.assertTrue(MasterProduct.objects.filter(name="pilsner bottle", category="").exists())
+        self.assertFalse(MasterProduct.objects.filter(name="Brand 350ml").exists())
+        blue_ice_card = ShopProduct.objects.get(shop=self.fig_tree, product=self.blue_ice)
+        self.assertEqual(blue_ice_card.cost_price, Decimal("150.00"))
+        self.assertEqual(blue_ice_card.selling_price, Decimal("200.00"))
+        for shop in (self.fig_tree, self.empire):
+            jameson = MasterProduct.objects.get(name="Jameson", category="350ml")
+            self.assertTrue(ShopProduct.objects.filter(
+                shop=shop, product=jameson, cost_price=Decimal("0.00"),
+                selling_price=Decimal("0.00"),
+            ).exists())
+
 
 class DailySalesSheetTests(BaseDataTestCase):
     """The one-submit daily stock sheet.

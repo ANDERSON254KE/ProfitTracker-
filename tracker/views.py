@@ -39,7 +39,7 @@ from .mixins import (
     OwnerRequiredMixin,
 )
 from .models import CustomUser, DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
-from .price_list import price_list_rank
+from .price_list import price_list_order, price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
 OWNER_TREND_DAYS = 7
@@ -526,6 +526,9 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         cards = ShopProduct.objects.filter(
             shop=self.shop, is_active=True, cost_price__gt=0
         ).select_related("product").order_by("product__name", "product__category")
+        unpriced_products = ShopProduct.objects.filter(
+            shop=self.shop, is_active=True, cost_price__lte=0
+        ).select_related("product").order_by("product__name", "product__category")
         manual_sales = {
             sale.product_id: sale
             for sale in DailySale.objects.filter(
@@ -547,6 +550,27 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 "stock_entry": card.product_id in stock_products,
             })
 
+        product_order = price_list_rank()
+        category_order = {}
+        for name, category in price_list_order():
+            if category and category not in category_order:
+                category_order[category] = len(category_order)
+        rows.sort(key=lambda row: (
+            category_order.get(row["card"].product.category, len(category_order)),
+            product_order.get(
+                (row["card"].product.name, row["card"].product.category),
+                len(product_order),
+            ),
+            row["card"].product.name.casefold(),
+        ))
+
+        category_groups = []
+        for row in rows:
+            category = row["card"].product.category or "Other / uncategorized"
+            if not category_groups or category_groups[-1]["category"] != category:
+                category_groups.append({"category": category, "rows": []})
+            category_groups[-1]["rows"].append(row)
+
         sales_totals = DailySale.objects.filter(shop=self.shop, sale_date=day).aggregate(
             revenue=Sum("total_revenue"), cost=Sum("total_cost"), profit=Sum("profit"), units=Sum("units_sold")
         )
@@ -557,6 +581,8 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             "shop": self.shop,
             "selected_date": day.isoformat(),
             "rows": rows,
+            "category_groups": category_groups,
+            "unpriced_products": list(unpriced_products),
             "expenses": expenses,
             "expense_description": posted.get("description", ""),
             "expense_amount": posted.get("amount", ""),
