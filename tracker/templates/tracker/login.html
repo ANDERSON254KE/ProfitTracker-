@@ -1,0 +1,53 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}Sign in · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mx-auto mt-16 max-w-md">
+    <div class="rounded-2xl bg-white p-8 shadow-xl">
+        <div class="mb-6 text-center">
+            <span class="inline-block rounded-xl bg-indigo-500 px-3 py-1.5 text-sm font-bold text-white">PT</span>
+            <h1 class="mt-4 text-2xl font-bold tracking-tight text-slate-900">Profit Tracker</h1>
+            <p class="mt-1 text-sm text-slate-500">Sign in to continue</p>
+        </div>
+
+        {% if form.errors %}
+            <div class="mb-4 rounded-lg bg-rose-100 px-4 py-3 text-sm font-medium text-rose-800">
+                Your username and password didn't match. Please try again.
+            </div>
+        {% endif %}
+
+        <form method="post" class="space-y-4">
+            {% csrf_token %}
+
+            <div>
+                <label for="id_username" class="block text-sm font-medium text-slate-700">Username</label>
+                <input type="text" name="username" id="id_username" autocomplete="username" required autofocus
+                       class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                {% if form.username.errors %}
+                    <p class="mt-1 text-xs text-rose-600">{{ form.username.errors|striptags }}</p>
+                {% endif %}
+            </div>
+
+            <div>
+                <label for="id_password" class="block text-sm font-medium text-slate-700">Password</label>
+                <input type="password" name="password" id="id_password" autocomplete="current-password" required
+                       class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                {% if form.password.errors %}
+                    <p class="mt-1 text-xs text-rose-600">{{ form.password.errors|striptags }}</p>
+                {% endif %}
+            </div>
+
+            {% if next %}
+                <input type="hidden" name="next" value="{{ next }}">
+            {% endif %}
+
+            <button type="submit"
+                    class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                Sign in
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

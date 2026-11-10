@@ -1,0 +1,90 @@
+{% load money %}<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Profit Tracker{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-full font-sans text-slate-800 antialiased">
+
+<nav class="bg-slate-900 text-white shadow-lg">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div class="flex h-16 items-center justify-between">
+            <a href="{% url 'dashboard' %}" class="flex items-center gap-2 text-lg font-semibold tracking-tight">
+                <span class="rounded bg-indigo-500 px-2 py-1 text-sm">PT</span>
+                Profit Tracker
+            </a>
+
+            <div class="hidden items-center gap-6 md:flex">
+                {% if user.is_authenticated %}
+                    {% if user.role == 'OWNER' %}
+                        <a href="{% url 'owner_dashboard' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'owner_dashboard' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            All Shops
+                        </a>
+                        <a href="{% url 'shop_pricing' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'shop_pricing' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Pricing
+                        </a>
+                    {% else %}
+                        <a href="{% url 'manager_dashboard' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'manager_dashboard' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            {{ user.assigned_shop.name|default:"My Shop" }}
+                        </a>
+                        <a href="{% url 'daily_sale_create' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'daily_sale_create' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Record Sale
+                        </a>
+                    {% endif %}
+                {% endif %}
+            </div>
+
+            <div class="flex items-center gap-3">
+                {% if user.is_authenticated %}
+                    <span class="hidden text-sm text-slate-300 sm:inline">
+                        {{ user.get_full_name|default:user.username }}
+                        <span class="text-slate-500">·</span>
+                        {{ user.get_role_display }}
+                        {% if user.assigned_shop %} @ {{ user.assigned_shop.name }}{% endif %}
+                    </span>
+                    {% comment %} Django 5+ only allows POST for logout, hence the form. {% endcomment %}
+                    <form method="post" action="{% url 'logout' %}">
+                        {% csrf_token %}
+                        <button type="submit"
+                                class="rounded-lg bg-slate-700 px-3 py-1.5 text-sm font-medium hover:bg-slate-600">
+                            Sign out
+                        </button>
+                    </form>
+                {% else %}
+                    <a href="{% url 'login' %}"
+                       class="rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium hover:bg-indigo-400">
+                        Sign in
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    {% if messages %}
+        <div class="mb-6 space-y-2">
+            {% for message in messages %}
+                <div class="rounded-lg px-4 py-3 text-sm font-medium shadow-sm {{ message.tags }}">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+</main>
+
+<footer class="mx-auto max-w-7xl px-4 pb-8 text-center text-xs text-slate-400">
+    Profit amounts are calculated on the server and locked in at the time of sale.
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

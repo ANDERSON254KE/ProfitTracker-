@@ -13,6 +13,7 @@ computed by the model.
 
 from datetime import timedelta
 from decimal import Decimal
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.contrib.auth import login
@@ -32,7 +33,7 @@ from .mixins import (
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
 )
-from .models import DailySale, Shop, ShopProduct
+from .models import CustomUser, DailySale, MasterProduct, Shop, ShopProduct
 from .price_list import price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
@@ -507,74 +508,13 @@ class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
 
 
 
-
-def admin_shop_sheet(request, shop):
-    """Admin shop sheet view: daily sales sheet for a specific shop."""
-    from datetime import date
-    from decimal import Decimal
-
-    from django.contrib import messages
-    from django.db.models import Sum
-    from django.http import Http404
-    from django.shortcuts import render
-    from tracker.models import DailySale, DayTotals, Product
-
-    # Resolve shop name to shop code
-    shop_choices = {
-        "Emirates": "Emirates",
-        "Empire Shop": "Empire Shop",
-        "Fig Tree": "Fig Tree",
-        "Small City": "Small City",
-    }
-    if shop not in shop_choices:
-        raise Http404(f"Shop '{shop}' not found")
-
-    shop_code = shop
-
-    # Get the date from GET params, default to today
-    date_iso = request.GET.get("date", date.today().isoformat())
-    sheet_date = date.fromisoformat(date_iso)
-
-    # Fetch rows for this shop and date
-    rows = DailySale.objects.filter(shop=shop_code, date=sheet_date).select_related("product")
-
-    # Compute KPIs
-    total_units = sum(r.quantity_sold for r in rows)
-    total_sales_value = sum(r.sell_price * r.quantity_sold for r in rows)
-    total_profit = sum(r.profit for r in rows)
-    expenses = DayTotals.objects.filter(shop=shop_code, date=sheet_date).aggregate(
-        Sum("total_expenditure")
-    )["total_expenditure__sum"] or 0
-
-    net_profit = total_profit - expenses
-
-    # Build chips for date navigation (distinct dates with data)
-    chips = DayTotals.objects.filter(shop=shop_code).values("date").annotate(
-        net=Sum(F("total_profit") - F("total_expenditure"))
-    )
-
-    # Available products for adding new rows
-    products = Product.objects.all()
-
-    context = {
-        "shop": shop,
-        "sheet_date": sheet_date,
-        "sheet_date_iso": date_iso,
-        "rows": rows,
-        "total_units": total_units,
-        "total_sales_value": total_sales_value,
-        "total_profit": total_profit,
-        "expenses": expenses,
-        "net_profit": net_profit,
-        "chips": chips,
-        "products": products,
-    }
-    return render(request, "tracker/admin_shop_sheet.html", context)
-
-
-
 class ProductComparisonView(OwnerRequiredMixin, TemplateView):
-    """Product comparison across shops: profits, sales, and trends for selected products."""
+    """Product comparison across shops: profits, sales, and trends for selected products.
+
+    Allows the owner to select up to 5 products and compare their performance
+    across all shops, showing profit, units sold, revenue, and trends.
+    Includes CSV export functionality.
+    """
 
     template_name = "tracker/product_comparison.html"
 
@@ -609,6 +549,7 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
                 "product_id",
                 "product__name",
                 "product__category",
+                "shop_id",
                 "shop__name",
                 "shop__location",
             ).annotate(
@@ -679,11 +620,34 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
                             "units_total": sum(day_cells_units, Decimal("0.00")),
                         }
                     )
+                # All-time per-shop cells, in ``shops`` order, so the template
+                # can walk the list instead of looking shops up by id.
+                product["shop_cells"] = [
+                    {
+                        "shop": shop,
+                        "profit": product["shops"].get(shop.pk, {}).get(
+                            "profit", Decimal("0.00")
+                        ),
+                        "units": product["shops"].get(shop.pk, {}).get(
+                            "units", Decimal("0.00")
+                        ),
+                        "revenue": product["shops"].get(shop.pk, {}).get(
+                            "revenue", Decimal("0.00")
+                        ),
+                    }
+                    for shop in context["shops"]
+                ]
+                product["total_revenue"] = sum(
+                    (cell["revenue"] for cell in product["shop_cells"]),
+                    Decimal("0.00"),
+                )
                 product["total_profit"] = sum(
-                    p["trend_data"][i]["profit_total"] for i in range(len(product["trend_data"]))
+                    (cell["profit"] for cell in product["shop_cells"]),
+                    Decimal("0.00"),
                 )
                 product["total_units"] = sum(
-                    p["trend_data"][i]["units_total"] for i in range(len(product["trend_data"]))
+                    (cell["units"] for cell in product["shop_cells"]),
+                    Decimal("0.00"),
                 )
                 product["avg_profit_per_shop"] = (
                     product["total_profit"] / len(context["shops"])
@@ -692,13 +656,28 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
                 )
 
             context["comparison_data"] = list(products_data.values())
+            context["totals"] = {
+                "profit": sum(
+                    (p["total_profit"] for p in context["comparison_data"]),
+                    Decimal("0.00"),
+                ),
+                "units": sum(
+                    (p["total_units"] for p in context["comparison_data"]),
+                    Decimal("0.00"),
+                ),
+                "revenue": sum(
+                    (p["total_revenue"] for p in context["comparison_data"]),
+                    Decimal("0.00"),
+                ),
+            }
 
         # CSV export URL
         if context["selected_product_ids"]:
-            context["csv_export_url"] = reverse(
-                "product_comparison_csv",
-                args=context["selected_product_ids"],
+            export_url = reverse("product_comparison_csv")
+            query = urlencode(
+                {"product_ids": context["selected_product_ids"]}, doseq=True
             )
+            context["csv_export_url"] = f"{export_url}?{query}"
         else:
             context["csv_export_url"] = ""
 
@@ -731,6 +710,7 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
             "product_id",
             "product__name",
             "product__category",
+            "shop_id",
             "shop__name",
             "shop__location",
         ).annotate(
@@ -788,3 +768,21 @@ class ProductComparisonView(OwnerRequiredMixin, TemplateView):
         response = HttpResponse(output.getvalue(), content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
+
+
+class ProductComparisonCSVView(OwnerRequiredMixin, View):
+    """Download the comparison table for the selected products as a CSV."""
+
+    def get(self, request, *args, **kwargs):
+        """Return the CSV for up to five ``product_ids`` query parameters."""
+        from django.http import HttpResponseBadRequest
+
+        try:
+            product_ids = [int(pid) for pid in request.GET.getlist("product_ids")][:5]
+        except ValueError:
+            return HttpResponseBadRequest("Invalid product id")
+
+        if not product_ids:
+            return HttpResponseBadRequest("Select at least one product")
+
+        return ProductComparisonView().get_csv_response(product_ids)

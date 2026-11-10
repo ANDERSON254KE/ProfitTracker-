@@ -4,59 +4,61 @@
 {% block title %}Product Comparison · Profit Tracker{% endblock %}
 
 {% block content %}
-<div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
     <div>
         <h1 class="text-2xl font-bold tracking-tight text-slate-900">Product Comparison</h1>
         <p class="text-sm text-slate-500">Compare profit, sales and trends for selected products across all shops</p>
     </div>
 
-    <div class="flex gap-2">
-        <!-- Product selection -->
-        <div class="rounded-lg border p-3 bg-white shadow-sm max-w-xs">
-            <label class="block text-xs font-medium text-slate-600 mb-2">Select up to 5 products:</label>
-            <select id="productSelect" multiple class="w-full rounded border p-2 text-sm focus:ring-indigo-500 focus:border-indigo-500">
+    <form method="get" class="flex flex-wrap items-end gap-3">
+        <div class="rounded-lg border bg-white p-3 shadow-sm">
+            <label for="productSelect" class="mb-2 block text-xs font-medium text-slate-600">
+                Select up to {{ max_products }} products
+            </label>
+            <select id="productSelect" name="product_ids" multiple size="8"
+                    class="w-64 rounded border p-2 text-sm focus:border-indigo-500 focus:ring-indigo-500">
                 {% for product in products %}
                 <option value="{{ product.id }}" {% if product.id in selected_product_ids %}selected{% endif %}>
-                    {{ product.name }}{% if product.category %} {{ product.category }}{% endif %}
+                    {{ product.name }}{% if product.category %} — {{ product.category }}{% endif %}
                 </option>
                 {% endfor %}
             </select>
         </div>
-
-        <button id="compareBtn" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+        <button type="submit"
+                class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
             Compare
         </button>
-
         {% if csv_export_url %}
-        <a href="{{ csv_export_url }}" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500" download>
+        <a href="{{ csv_export_url }}" download
+           class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
             CSV Export
         </a>
         {% endif %}
-    </div>
+    </form>
 </div>
 
-{# ---- Summary cards ---- #}
-<div id="comparisonCards" class="grid grid-cols-1 gap-4 sm:grid-cols-3 hidden">
-    <div class="rounded-xl bg-white p-5 shadow" id="totalProfitCard">
+{% if totals %}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    <div class="rounded-xl bg-white p-5 shadow">
         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Profit</p>
-        <p class="mt-2 text-2xl font-bold text-slate-900" id="totalProfitValue">—</p>
+        <p class="mt-2 text-2xl font-bold {% if totals.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ totals.profit|ksh }}
+        </p>
     </div>
-    <div class="rounded-xl bg-white p-5 shadow" id="totalUnitsCard">
+    <div class="rounded-xl bg-white p-5 shadow">
         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Units</p>
-        <p class="mt-2 text-2xl font-bold text-slate-900" id="totalUnitsValue">—</p>
+        <p class="mt-2 text-2xl font-bold text-slate-900">{{ totals.units|units }}</p>
     </div>
-    <div class="rounded-xl bg-white p-5 shadow" id="totalRevenueCard">
+    <div class="rounded-xl bg-white p-5 shadow">
         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Revenue</p>
-        <p class="mt-2 text-2xl font-bold text-slate-900" id="totalRevenueValue">—</p>
+        <p class="mt-2 text-2xl font-bold text-slate-900">{{ totals.revenue|ksh }}</p>
     </div>
 </div>
 
-{# ---- Products comparison table ---- #}
-<div class="mt-6 rounded-xl bg-white shadow">
+<div class="mt-6 overflow-hidden rounded-xl bg-white shadow">
     <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Product Comparison Table</h2>
+        <h2 class="text-base font-semibold text-slate-900">Profit by Shop</h2>
     </div>
-    {% if comparison_data %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
@@ -67,91 +69,86 @@
                     <th class="px-5 py-3 text-right font-semibold">{{ shop.name }}</th>
                     {% endfor %}
                     <th class="px-5 py-3 text-right font-semibold">Total Profit</th>
+                    <th class="px-5 py-3 text-right font-semibold">Units</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
                 {% for product in comparison_data %}
                 <tr class="hover:bg-slate-50">
-                    <td class="px-5 py-3 font-medium text-slate-900">{{ product.product_name }}{% if product.product_category %} {{ product.product_category }}{% endif %}</td>
-                    <td class="px-5 py-3 text-slate-500 text-xs">{{ product.product_category or '' }}</td>
-                    {% for shop in shops %}
-                    <td class="px-5 py-3 text-right {% if product.shops.shop.pk == shop.pk and product.shops.profit >= 0 %}text-slate-700{% else %}text-rose-600{% endif %}">
-                        {% if product.shops.shop.pk in product.shops %}
-                        {{ product.shops.shop.pk|default:"—" }}
-                        {% else %}
-                        —
-                        {% endif %}
-                        </td>
-                        {% empty %}
-                        <td class="px-5 py-3 text-right">—</td>
-                        {% endfor %}
-                        <td class="px-5 py-3 text-right font-semibold">
-                            {{ product.total_profit|ksh }}
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <p class="px-5 py-6 text-center text-slate-500">Select products to compare</p>
-    {% endif %}
-</div>
-
-{# ---- Trend charts (last 7 days) ---- #}
-<div class="mt-6 rounded-xl bg-white shadow">
-    <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">7-Day Trend</h2>
-    </div>
-    {% if comparison_data %}
-    <div class="overflow-x-auto">
-        <table class="min-w-full text-sm">
-            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                    <th class="px-5 py-3 text-left font-semibold">Date</th>
-                    {% for product in comparison_data %}
-                    <th class="px-5 py-3 text-right font-semibold text-indigo-600" colspan="1">{{ product.product_name }}{% if product.product_category %} {{ product.product_category }}{% endif %}</th>
+                    <td class="px-5 py-3 font-medium text-slate-900">{{ product.product_name }}</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">{{ product.product_category|default:"—" }}</td>
+                    {% for cell in product.shop_cells %}
+                    <td class="px-5 py-3 text-right {% if cell.profit < 0 %}text-rose-600{% else %}text-slate-700{% endif %}">
+                        {{ cell.profit|ksh }}
+                    </td>
                     {% endfor %}
-                    <th class="px-5 py-3 text-right font-semibold">Day Total</th>
+                    <td class="px-5 py-3 text-right font-semibold {% if product.total_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                        {{ product.total_profit|ksh }}
+                    </td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ product.total_units|units }}</td>
                 </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-                {% for day_row in trend_rows %}
-                <tr class="{% if day_row.is_today %}bg-indigo-50{% else %}hover:bg-slate-50{% endif %}">
-                    <td class="whitespace-nowrap px-5 py-3 font-medium text-slate-900">{{ day_row.date|date:"D d M" }}{% if day_row.is_today %}<span class="ml-1 text-xs text-indigo-600">today</span>{% endif %}</td>
-                    {% for product in comparison_data %}
-                    <td class="px-5 py-3 text-right">
-                        {% if day_row.profit_cells|length > 0 %}
-                        <span class="{% if day_row.profit_cells|last|default:"0" >= 0 %}text-slate-700{% else %}text-rose-600{% endif %}">
-                            {{ day_row.profit_cells|last|default:"0"|ksh }}
-                        </span>
-                        {% else %}
-                        —
-                        {% endif %}
-                        </td>
-                        {% endfor %}
-                        <td class="px-5 py-3 text-right font-semibold">
-                            {{ day_row.day_total|ksh }}
-                        </td>
-                    </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-    {% endif %}
 </div>
 
-{# ---- Product detail sections ---- #}
-{% if comparison_data %}
+<div class="mt-6 overflow-hidden rounded-xl bg-white shadow">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Last 7 Days</h2>
+    </div>
+    <div class="space-y-6 p-5">
+        {% for product in comparison_data %}
+        <div>
+            <h3 class="mb-2 text-sm font-semibold text-slate-900">
+                {{ product.product_name }}{% if product.product_category %} — {{ product.product_category }}{% endif %}
+            </h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th class="px-3 py-2 text-left font-semibold">Date</th>
+                            {% for shop in shops %}
+                            <th class="px-3 py-2 text-right font-semibold">{{ shop.name }}</th>
+                            {% endfor %}
+                            <th class="px-3 py-2 text-right font-semibold">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for day in product.trend_data %}
+                        <tr class="{% if day.date == today %}bg-indigo-50{% else %}hover:bg-slate-50{% endif %}">
+                            <td class="whitespace-nowrap px-3 py-2 font-medium text-slate-900">
+                                {{ day.date|date:"D d M" }}{% if day.date == today %}
+                                <span class="ml-1 text-xs text-indigo-600">today</span>{% endif %}
+                            </td>
+                            {% for value in day.profit_cells %}
+                            <td class="px-3 py-2 text-right {% if value < 0 %}text-rose-600{% else %}text-slate-700{% endif %}">
+                                {{ value|ksh }}
+                            </td>
+                            {% endfor %}
+                            <td class="px-3 py-2 text-right font-semibold text-slate-900">{{ day.profit_total|ksh }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
     {% for product in comparison_data %}
-    <div class="rounded-xl bg-white shadow p-4">
-        <h3 class="text-semibold text-slate-900 mb-3">{{ product.product_name }}{% if product.product_category %} {{ product.product_category }}{% endif %}</h3>
-
-        <div class="grid grid-cols-2 gap-2 text-sm">
+    <div class="rounded-xl bg-white p-4 shadow">
+        <h3 class="mb-3 font-semibold text-slate-900">
+            {{ product.product_name }}{% if product.product_category %} — {{ product.product_category }}{% endif %}
+        </h3>
+        <div class="grid grid-cols-2 gap-3 text-sm">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Profit</p>
-                <p class="mt-1 font-bold {{ product.total_profit < 0 ? 'text-rose-600' : 'text-emerald-600' }}">{{ product.total_profit|ksh }}</p>
+                <p class="mt-1 font-bold {% if product.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                    {{ product.total_profit|ksh }}
+                </p>
             </div>
             <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Units</p>
@@ -163,107 +160,32 @@
             </div>
             <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg Profit/Shop</p>
-                <p class="mt-1 font-bold {{ product.avg_profit_per_shop < 0 ? 'text-rose-600' : 'text-emerald-600' }}">{{ product.avg_profit_per_shop|ksh }}</p>
+                <p class="mt-1 font-bold {% if product.avg_profit_per_shop < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                    {{ product.avg_profit_per_shop|ksh }}
+                </p>
             </div>
         </div>
 
         <div class="mt-4">
-            <p class="text-xs font-medium text-slate-600 mb-2">Performance by Shop</p>
-            <div class="grid grid-cols-4 gap-2">
-                {% for shop in shops %}
+            <p class="mb-2 text-xs font-medium text-slate-600">Performance by Shop</p>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {% for cell in product.shop_cells %}
                 <div class="rounded bg-slate-100 p-2 text-center text-xs">
-                    <p class="font-semibold text-slate-800">{{ shop.name }}</p>
-                    <p class="font-medium {{ product.shops.shop.pk == shop.pk && product.shops.profit >= 0 ? 'text-emerald-600' : 'text-rose-600' }}">{{ product.shops.shop.pk|default:"0.00"|ksh }}</p>
-                </div>
-                {% empty %}
-                <div class="rounded bg-slate-100 p-2 text-center text-xs">
-                    <p class="font-semibold text-slate-800">—</p>
-                    <p class="font-medium text-slate-600">0.00</p>
+                    <p class="font-semibold text-slate-800">{{ cell.shop.name }}</p>
+                    <p class="font-medium {% if cell.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                        {{ cell.profit|ksh }}
+                    </p>
+                    <p class="text-slate-500">{{ cell.units|units }} units</p>
                 </div>
                 {% endfor %}
             </div>
         </div>
     </div>
     {% endfor %}
-    {% endfor %}
+</div>
+{% else %}
+<div class="mt-6 rounded-xl bg-white p-8 text-center shadow">
+    <p class="text-slate-500">Select one or more products above and press Compare.</p>
 </div>
 {% endif %}
-
-{# --- JavaScript for product selection --- #}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const productSelect = document.getElementById('productSelect');
-    const compareBtn = document.getElementById('compareBtn');
-    const comparisonCards = document.getElementById('comparisonCards');
-    const totalProfitValue = document.getElementById('totalProfitValue');
-    const totalUnitsValue = document.getElementById('totalUnitsValue');
-    const totalRevenueValue = document.getElementById('totalRevenueValue');
-
-    // Initially hide cards until comparison is made
-    comparisonCards.classList.add('hidden');
-
-    compareBtn.addEventListener('click', function() {
-        const selectedOptions = Array.from(productSelect.selectedOptions);
-        const productIds = selectedOptions.map(opt => opt.value);
-
-        if (productIds.length === 0) {
-            alert('Please select at least one product to compare');
-            return;
-        }
-
-        if (productIds.length > 5) {
-            alert('Please select maximum 5 products for comparison');
-            return;
-        }
-
-        // Show loading state
-        compareBtn.disabled = true;
-        compareBtn.textContent = 'Comparing...';
-
-        // Build query string
-        const params = new URLSearchParams();
-        productIds.forEach(id => params.append('product_ids', id));
-
-        // Fetch comparison data
-        fetch('?' + params.toString())
-            .then(response => response.text())
-            .then(html => {
-                // Insert the comparison data into the page
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = html;
-
-                // Extract the comparison section
-                const newCards = tempDiv.getElementById('comparisonCards');
-                const newTotalProfit = tempDiv.getElementById('totalProfitValue');
-                const newTotalUnits = tempDiv.getElementById('totalUnitsValue');
-                const newTotalRevenue = tempDiv.getElementById('totalRevenueValue');
-                const newTable = tempDiv.querySelector('table');
-
-                if (newCards) {
-                    comparisonCards.classList.remove('hidden');
-                    comparisonCards.innerHTML = newCards.innerHTML;
-                }
-
-                if (newTotalProfit) totalProfitValue.textContent = newTotalProfit.textContent;
-                if (newTotalUnits) totalUnitsValue.textContent = newTotalUnits.textContent;
-                if (newTotalRevenue) totalRevenueValue.textContent = newTotalRevenue.textContent;
-
-                if (newTable) {
-                    const tableContainer = document.querySelector('.overflow-x-auto');
-                    if (tableContainer) {
-                        tableContainer.innerHTML = newTable.parentNode.innerHTML;
-                    }
-                }
-            })
-            .catch(error => {
-                console.error('Error fetching comparison data:', error);
-                alert('Error loading comparison data. Please try again.');
-            })
-            .finally(() => {
-                compareBtn.disabled = false;
-                compareBtn.textContent = 'Compare';
-            });
-    });
-});
-</script>
 {% endblock %}

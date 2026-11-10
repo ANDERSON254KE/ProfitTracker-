@@ -44,10 +44,15 @@ urlpatterns = [
         views.ShopProductPriceAPIView.as_view(),
         name="shop_product_price",
     ),
+    # Product comparison page - owner can compare up to 5 products across all shops
+    path(
+        "product-comparison/",
+        views.ProductComparisonView.as_view(),
+        name="product_comparison",
+    ),
+    path(
+        "product-comparison/export/",
+        views.ProductComparisonCSVView.as_view(),
+        name="product_comparison_csv",
+    ),
 ]
-
-# Product comparison page - owner can compare up to 5 products across all shops
-path("product-comparison/", views.ProductComparisonView.as_view(), name="product_comparison"),
-
-# Product comparison page - owner can compare up to 5 products across all shops
-path("product-comparison/", views.ProductComparisonView.as_view(), name="product_comparison"),
