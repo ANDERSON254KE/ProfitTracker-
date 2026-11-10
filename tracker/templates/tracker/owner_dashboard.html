@@ -63,41 +63,47 @@
     </div>
 </div>
 
-{# ---- Per-shop breakdown ---- #}
-<div class="mt-6 rounded-xl bg-white shadow">
-    <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Profit by shop</h2>
+{# ---- Shop cards ---- #}
+<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {% for row in shop_rows %}
+    <a href="{% url 'shop_detail' row.shop.pk %}"
+       class="group rounded-xl bg-white p-5 shadow transition hover:-translate-y-0.5 hover:shadow-lg">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-base font-semibold text-slate-900 group-hover:text-indigo-600">{{ row.shop.name }}</h2>
+                <p class="text-xs text-slate-500">{{ row.shop.location|default:"—" }}</p>
+            </div>
+            <span class="rounded-full {% if row.profit < 0 %}bg-rose-50 text-rose-600{% else %}bg-emerald-50 text-emerald-600{% endif %} px-3 py-1 text-xs font-semibold">
+                All time {{ row.profit|ksh }}
+            </span>
+        </div>
+        <div class="mt-4 grid grid-cols-3 gap-2 text-center">
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Today</p>
+                <p class="mt-1 text-sm font-bold {% if row.today_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                    {{ row.today_profit|ksh }}
+                </p>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">7 days</p>
+                <p class="mt-1 text-sm font-bold {% if row.week_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                    {{ row.week_profit|ksh }}
+                </p>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Units</p>
+                <p class="mt-1 text-sm font-bold text-slate-900">{{ row.units|units }}</p>
+            </div>
+        </div>
+        <p class="mt-3 text-right text-xs font-medium text-indigo-600 opacity-0 transition group-hover:opacity-100">
+            View shop report →
+        </p>
+    </a>
+    {% empty %}
+    <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
+        No shops yet. Create them in the admin to start tracking.
     </div>
-    <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-slate-200 text-sm">
-            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                    <th class="px-5 py-3 text-left font-semibold">Shop</th>
-                    <th class="px-5 py-3 text-left font-semibold">Location</th>
-                    <th class="px-5 py-3 text-right font-semibold">Units Sold</th>
-                    <th class="px-5 py-3 text-right font-semibold">Amount</th>
-                    <th class="px-5 py-3 text-right font-semibold">Profit</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-                {% for row in shop_rows %}
-                    <tr class="hover:bg-slate-50">
-                        <td class="px-5 py-3 font-medium text-slate-900">{{ row.shop.name }}</td>
-                        <td class="px-5 py-3 text-slate-500">{{ row.shop.location|default:"—" }}</td>
-                        <td class="px-5 py-3 text-right text-slate-700">{{ row.units|units }}</td>
-                        <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
-                        <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                            {{ row.profit|ksh }}
-                        </td>
-                    </tr>
-                {% empty %}
-                    <tr>
-                        <td colspan="5" class="px-5 py-6 text-center text-slate-500">No shops yet.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+    {% endfor %}
 </div>
 
 {# ---- Last 7 days ---- #}

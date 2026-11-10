@@ -1,0 +1,266 @@
+{% extends "tracker/base.html" %}
+{% load money %}
+
+{% block title %}{{ shop.name }} · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div>
+        <a href="{% url 'owner_dashboard' %}" class="text-sm text-slate-500 hover:text-indigo-600">← All shops</a>
+        <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900">{{ shop.name }}</h1>
+        <p class="text-sm text-slate-500">{{ shop.location|default:"—" }} · {{ day_count }} trading day(s)</p>
+    </div>
+    <div class="flex gap-2">
+        <a href="{{ pricing_url }}"
+           class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+            Manage Pricing
+        </a>
+        <a href="{{ csv_export_url }}" download
+           class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
+            CSV Export
+        </a>
+    </div>
+</div>
+
+{# ---- KPI cards ---- #}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="rounded-xl bg-white p-5 shadow">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Today's Profit</p>
+        <p class="mt-2 text-3xl font-bold {% if today_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ today_profit|ksh }}
+        </p>
+        <p class="mt-1 text-xs text-slate-400">{{ today_units|units }} unit(s) · {{ today_revenue|ksh }}</p>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profit — Last 7 Days</p>
+        <p class="mt-2 text-3xl font-bold {% if week_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ week_profit|ksh }}
+        </p>
+        <p class="mt-1 text-xs text-slate-400">{{ week_units|units }} unit(s) · {{ week_revenue|ksh }}</p>
+    </div>
+    <div class="rounded-xl bg-white p-5 shadow">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">All-Time Profit</p>
+        <p class="mt-2 text-3xl font-bold {% if total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ total_profit|ksh }}
+        </p>
+        <p class="mt-1 text-xs text-slate-400">{{ total_units|units }} unit(s) · {{ total_revenue|ksh }}</p>
+    </div>
+</div>
+
+{# ---- Most sold products ---- #}
+<div class="mt-6 rounded-xl bg-white shadow">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Most sold products</h2>
+        <p class="text-xs text-slate-500">Top {{ top_products|length }} by units sold, all time</p>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-5 py-3 text-left font-semibold">#</th>
+                    <th class="px-5 py-3 text-left font-semibold">Product</th>
+                    <th class="px-5 py-3 text-left font-semibold">Category</th>
+                    <th class="px-5 py-3 text-right font-semibold">Units Sold</th>
+                    <th class="px-5 py-3 text-right font-semibold">Revenue</th>
+                    <th class="px-5 py-3 text-right font-semibold">Profit</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in top_products %}
+                <tr class="hover:bg-slate-50">
+                    <td class="px-5 py-3 text-slate-400">{{ forloop.counter }}</td>
+                    <td class="px-5 py-3 font-medium text-slate-900">{{ row.product__name }}</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">{{ row.product__category|default:"—" }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ row.units|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
+                    <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                        {{ row.profit|ksh }}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="px-5 py-6 text-center text-slate-500">No sales recorded yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# ---- In-shop product comparison ---- #}
+<div class="mt-6 rounded-xl bg-white shadow">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Compare products in this shop</h2>
+        <p class="text-xs text-slate-500">Tick up to {{ max_compare }} products to see them side by side</p>
+    </div>
+    <form method="get" class="p-5">
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {% for sp in shop_products %}
+            <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:border-indigo-300">
+                <input type="checkbox" name="compare" value="{{ sp.product_id }}"
+                       {% if sp.product_id in compare_ids %}checked{% endif %}
+                       class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                <span>
+                    <span class="font-medium text-slate-900">{{ sp.product.name }}</span>
+                    {% if sp.product.category %}
+                    <span class="block text-xs text-slate-400">{{ sp.product.category }}</span>
+                    {% endif %}
+                </span>
+            </label>
+            {% endfor %}
+        </div>
+        <button type="submit"
+                class="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+            Compare
+        </button>
+    </form>
+
+    {% if comparison_data %}
+    <div class="border-t border-slate-200 p-5">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-5 py-3 text-left font-semibold">Product</th>
+                        <th class="px-5 py-3 text-right font-semibold">Units Sold</th>
+                        <th class="px-5 py-3 text-right font-semibold">Revenue</th>
+                        <th class="px-5 py-3 text-right font-semibold">Profit</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in comparison_data %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-5 py-3 font-medium text-slate-900">
+                            {{ row.name }}{% if row.category %} <span class="text-xs text-slate-400">· {{ row.category }}</span>{% endif %}
+                        </td>
+                        <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ row.units|units }}</td>
+                        <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
+                        <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                            {{ row.profit|ksh }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-6">
+            <h3 class="mb-2 text-sm font-semibold text-slate-900">Daily profit — last 30 days</h3>
+            <div class="h-72"><canvas id="chart-shop-compare"></canvas></div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{# ---- Dated profits ---- #}
+<div class="mt-6 rounded-xl bg-white shadow">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Profit by date</h2>
+        <p class="text-xs text-slate-500">Every trading day, newest first</p>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-5 py-3 text-left font-semibold">Date</th>
+                    <th class="px-5 py-3 text-right font-semibold">Units Sold</th>
+                    <th class="px-5 py-3 text-right font-semibold">Revenue</th>
+                    <th class="px-5 py-3 text-right font-semibold">Profit</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in day_rows %}
+                <tr class="{% if row.sale_date == today %}bg-indigo-50{% else %}hover:bg-slate-50{% endif %}">
+                    <td class="whitespace-nowrap px-5 py-3 font-medium text-slate-900">
+                        {{ row.sale_date|date:"D d M Y" }}
+                        {% if row.sale_date == today %}<span class="ml-1 text-xs text-indigo-600">today</span>{% endif %}
+                    </td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.units|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
+                    <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                        {{ row.profit|ksh }}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="4" class="px-5 py-6 text-center text-slate-500">No trading days recorded yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if is_paginated %}
+    <div class="flex items-center justify-between border-t border-slate-200 px-5 py-3 text-sm">
+        <p class="text-slate-500">
+            Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+            · {{ page_obj.paginator.count }} day(s)
+        </p>
+        <div class="flex gap-2">
+            {% if page_obj.has_previous %}
+            <a href="?compare={{ compare_ids|join:',' }}&page={{ page_obj.previous_page_number }}"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">← Newer</a>
+            {% endif %}
+            {% if page_obj.has_next %}
+            <a href="?compare={{ compare_ids|join:',' }}&page={{ page_obj.next_page_number }}"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Older →</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{% if comparison_chart %}
+{{ comparison_chart|json_script:"shop-compare-chart" }}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if comparison_chart %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+    var payloadEl = document.getElementById('shop-compare-chart');
+    if (!payloadEl || typeof Chart === 'undefined') return;
+    var C = JSON.parse(payloadEl.textContent);
+    var PALETTE = ['#4f46e5', '#16a34a', '#d97706', '#0891b2'];
+    var GRID = 'rgba(24, 24, 27, .07)';
+
+    Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+    Chart.defaults.color = '#64748b';
+
+    function money(v) {
+        return 'KSh ' + Number(v).toLocaleString('en-KE', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+        });
+    }
+
+    new Chart(document.getElementById('chart-shop-compare'), {
+        type: 'line',
+        data: {
+            labels: C.labels,
+            datasets: C.datasets.map(function (s, i) {
+                return {
+                    label: s.label, data: s.data,
+                    borderColor: PALETTE[i % PALETTE.length],
+                    backgroundColor: PALETTE[i % PALETTE.length],
+                    borderWidth: 2, tension: .35, pointRadius: 2, pointHoverRadius: 5
+                };
+            })
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+                tooltip: { callbacks: { label: function (c) { return ' ' + c.dataset.label + ': ' + money(c.parsed.y); } } }
+            },
+            scales: {
+                x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 15 } },
+                y: { grid: { color: GRID }, border: { display: false },
+                     ticks: { callback: function (v) { return 'KSh ' + Number(v).toLocaleString(); } } }
+            }
+        }
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

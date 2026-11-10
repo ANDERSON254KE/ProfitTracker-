@@ -424,6 +424,194 @@ class DashboardAnalyticsTests(BaseDataTestCase):
         self.assertEqual(sum(trend["values"]), 200.0)
 
 
+class ShopDetailViewTests(BaseDataTestCase):
+    """The per-shop report page behind the owner dashboard's shop cards."""
+
+    def setUp(self):
+        super().setUp()
+        # A dated sale three days ago and one today, both at Fig Tree.
+        old = DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("1"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.filter(pk=old.pk).update(
+            sale_date=timezone.localdate() - timedelta(days=3)
+        )
+        self.today_sale = DailySale.objects.create(
+            shop=self.fig_tree, product=self.blue_ice, units_sold=Decimal("4"),
+            unit_cost_at_sale=Decimal("150.00"), unit_price_at_sale=Decimal("200.00"),
+            recorded_by=self.fig_manager,
+        )
+        # Empire sells a lot of Gilbeys.
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, units_sold=Decimal("10"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("600.00"),
+            recorded_by=self.empire_manager,
+        )
+
+    def test_owner_dashboard_cards_carry_today_and_week_profit(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("owner_dashboard"))
+        cards = {row["shop"].pk: row for row in response.context["shop_rows"]}
+        fig = cards[self.fig_tree.pk]
+        self.assertEqual(fig["today_profit"], Decimal("200.00"))   # 4 x Blue Ice
+        self.assertEqual(fig["week_profit"], Decimal("400.00"))    # today + 3 days ago
+        self.assertEqual(cards[self.empire.pk]["today_profit"], Decimal("1500.00"))
+
+    def test_cards_link_to_the_shop_report(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("owner_dashboard"))
+        self.assertContains(response, reverse("shop_detail", args=[self.fig_tree.pk]))
+
+    def test_shop_report_shows_kpis_and_dated_rows(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        self.assertEqual(response.context["shop"], self.fig_tree)
+        self.assertEqual(response.context["today_profit"], Decimal("200.00"))
+        self.assertEqual(response.context["week_profit"], Decimal("400.00"))
+        self.assertEqual(response.context["total_profit"], Decimal("400.00"))
+        # One row per trading day, newest first.
+        dates = [row["sale_date"] for row in response.context["day_rows"]]
+        self.assertEqual(dates, sorted(dates, reverse=True))
+        self.assertEqual(len(dates), 2)
+
+    def test_most_sold_products_are_ranked_by_units(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        top = response.context["top_products"]
+        self.assertEqual(top[0]["product_id"], self.blue_ice.pk)   # 4 units
+        self.assertEqual(top[1]["product_id"], self.gilbeys.pk)   # 1 unit
+
+    def test_in_shop_comparison_limits_and_scopes_products(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"compare": [self.gilbeys.pk, self.blue_ice.pk]},
+        )
+        compared = [p["product_id"] for p in response.context["comparison_data"]]
+        self.assertEqual(compared, [self.gilbeys.pk, self.blue_ice.pk])
+        self.assertEqual(response.context["comparison_chart"]["datasets"][0]["data"][-1], 200.0)
+
+    def test_comparison_only_offers_the_shop_own_products(self):
+        """A product the shop does not stock is quietly dropped."""
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("shop_detail", args=[self.empire.pk]),
+            {"compare": [self.gilbeys.pk, self.blue_ice.pk]},  # Blue Ice not stocked
+        )
+        compared = [p["product_id"] for p in response.context["comparison_data"]]
+        self.assertEqual(compared, [self.gilbeys.pk])
+
+    def test_dated_table_is_paginated(self):
+        for day in range(2, 45):
+            sale = DailySale.objects.create(
+                shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("1"),
+                unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+                recorded_by=self.fig_manager,
+            )
+            DailySale.objects.filter(pk=sale.pk).update(
+                sale_date=timezone.localdate() - timedelta(days=day)
+            )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        self.assertTrue(response.context["is_paginated"])
+        self.assertLessEqual(len(response.context["day_rows"]), 30)
+
+    def test_a_manager_is_refused(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("shop_detail", args=[self.empire.pk]))
+        self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_is_redirected(self):
+        response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        self.assertEqual(response.status_code, 302)
+
+    def test_csv_export_lists_days_and_products(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_report_csv", args=[self.fig_tree.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv")
+
+        content = response.content.decode()
+        self.assertIn("Fig Tree — profit report", content)
+        self.assertIn("Most sold", content)
+        self.assertIn("Daily totals", content)
+        self.assertIn("Shop totals", content)
+        self.assertIn("200.00", content)   # today's Blue Ice profit
+
+
+class ShopPricingFilterTests(BaseDataTestCase):
+    """The per-shop view of the price editor."""
+
+    def test_without_a_filter_every_shop_is_shown(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_pricing"))
+        self.assertEqual(
+            set(response.context["grouped_products"]), {self.fig_tree, self.empire}
+        )
+        self.assertIsNone(response.context["current_shop"])
+
+    def test_with_a_shop_only_that_card_is_shown(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_pricing"), {"shop": self.fig_tree.pk})
+        self.assertEqual(set(response.context["grouped_products"]), {self.fig_tree})
+        self.assertEqual(response.context["current_shop"], self.fig_tree)
+
+    def test_a_manager_is_refused(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("shop_pricing"), {"shop": self.fig_tree.pk})
+        self.assertEqual(response.status_code, 403)
+
+
+class ProductComparisonFeatureTests(BaseDataTestCase):
+    """Search-driven product A vs product B comparisons."""
+
+    def setUp(self):
+        super().setUp()
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, units_sold=Decimal("2"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, units_sold=Decimal("10"),
+            unit_cost_at_sale=Decimal("450.00"), unit_price_at_sale=Decimal("600.00"),
+            recorded_by=self.empire_manager,
+        )
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.blue_ice, units_sold=Decimal("4"),
+            unit_cost_at_sale=Decimal("150.00"), unit_price_at_sale=Decimal("200.00"),
+            recorded_by=self.fig_manager,
+        )
+
+    def test_product_a_and_b_search_fields_compare_two_products(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_comparison"),
+            {"product_a": self.gilbeys.pk, "product_b": self.blue_ice.pk},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["product_id"] for item in response.context["comparison_data"]],
+            [self.gilbeys.pk, self.blue_ice.pk],
+        )
+        self.assertEqual(response.context["scope_name"], "All shops")
+
+    def test_single_shop_scope_filters_product_pair_comparison(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_comparison"),
+            {"product_a": self.gilbeys.pk, "product_b": self.blue_ice.pk, "shop": self.fig_tree.pk},
+        )
+        self.assertEqual(response.context["selected_shop"], self.fig_tree)
+        self.assertEqual(response.context["scope_name"], self.fig_tree.name)
+        self.assertEqual(
+            [cell["shop"].pk for cell in response.context["comparison_data"][0]["shop_cells"]],
+            [self.fig_tree.pk],
+        )
+
+
 class ProductReportTests(BaseDataTestCase):
     """The all-products cross-shop report page and its CSV export."""
 

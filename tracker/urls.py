@@ -9,6 +9,8 @@
     /api/shop-product-price/<pk>/     -> manager, price lookup for the preview JS
     /product-comparison/              -> owner, compare up to 5 products
     /products/report/                 -> owner, all-products cross-shop report
+    /shops/<pk>/                      -> owner, one shop's report (most sold, dated profits)
+    /shops/<pk>/export/               -> owner, that shop's report as CSV
 """
 
 from django.urls import path
@@ -67,5 +69,16 @@ urlpatterns = [
         "products/report/export/",
         views.ProductReportCSVView.as_view(),
         name="product_report_csv",
+    ),
+    # Per-shop report pages (owner dashboard shop cards link here)
+    path(
+        "shops/<int:pk>/",
+        views.ShopDetailView.as_view(),
+        name="shop_detail",
+    ),
+    path(
+        "shops/<int:pk>/export/",
+        views.ShopReportCSVView.as_view(),
+        name="shop_report_csv",
     ),
 ]

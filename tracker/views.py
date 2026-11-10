@@ -21,12 +21,13 @@ from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
+from django.core.paginator import Paginator
 from django.db.models import Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.generic import CreateView, RedirectView, TemplateView, View
+from django.views.generic import CreateView, DetailView, RedirectView, TemplateView, View
 
 from .forms import DailySaleForm, DailySalesSheetForm, ShopPricingForm
 from .mixins import (
@@ -48,6 +49,10 @@ OWNER_TOP_PRODUCTS = 10
 MANAGER_CHART_DAYS = 14
 #: Number of recent sale lines shown on a manager's dashboard.
 MANAGER_HISTORY_ROWS = 15
+#: Rows per page in a shop report's dated profit table.
+SHOP_DETAIL_PAGE_SIZE = 30
+#: Products in a shop's "most sold" report.
+SHOP_TOP_PRODUCTS = 10
 #: Kenyan shillings symbol used by the ``ksh`` template filter.
 CURRENCY = "KSh"
 
@@ -150,6 +155,18 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
                 profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
             )
         }
+        today_per_shop = {
+            row["shop"]: _money(row["profit"])
+            for row in sales.filter(sale_date=today)
+            .values("shop")
+            .annotate(profit=Sum("profit"))
+        }
+        week_per_shop = {
+            row["shop"]: _money(row["profit"])
+            for row in sales.filter(sale_date__gte=window_start)
+            .values("shop")
+            .annotate(profit=Sum("profit"))
+        }
         shop_rows = []
         for shop in shops:
             row = per_shop.get(shop.pk, {})
@@ -159,6 +176,8 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
                     "profit": _money(row.get("profit")),
                     "units": _money(row.get("units")),
                     "revenue": _money(row.get("revenue")),
+                    "today_profit": today_per_shop.get(shop.pk, Decimal("0.00")),
+                    "week_profit": week_per_shop.get(shop.pk, Decimal("0.00")),
                 }
             )
         shop_rows.sort(key=lambda r: r["profit"], reverse=True)
@@ -487,19 +506,30 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 class ShopPricingView(OwnerRequiredMixin, View):
     """Owner-only inline editor for every shop's price card.
 
-    ``GET`` renders all :class:`ShopProduct` rows grouped by shop. ``POST``
-    accepts ``shop_product-<pk>-<field>`` inputs and updates each row, so the
-    owner can correct many prices in a single submit.
+    Each shop prices its products independently, so ``GET ?shop=<pk>``
+    narrows the page to a single shop's card; without the parameter every
+    shop is shown. ``POST`` accepts ``shop_product-<pk>-<field>`` inputs and
+    updates each row, so the owner can correct many prices in one submit.
     """
 
     template_name = "tracker/shop_pricing.html"
 
+    def _current_shop(self, request):
+        """Return the shop the editor is scoped to, or ``None`` for all."""
+        raw = request.GET.get("shop") or request.POST.get("shop")
+        if not raw:
+            return None
+        return get_object_or_404(Shop, pk=raw)
+
     def get(self, request, *args, **kwargs):
-        """Render the price editor with all rows grouped by shop."""
+        """Render the price editor, one card per shop (or a single shop)."""
+        shop = self._current_shop(request)
         grouped = {}
         shop_products = ShopProduct.objects.select_related("shop", "product").order_by(
             "shop__name", "product__name"
         )
+        if shop is not None:
+            shop_products = shop_products.filter(shop=shop)
         for sp in shop_products:
             grouped.setdefault(sp.shop, []).append(sp)
 
@@ -509,13 +539,18 @@ class ShopPricingView(OwnerRequiredMixin, View):
             {
                 "grouped_products": grouped,
                 "shops": Shop.objects.all(),
+                "current_shop": shop,
             },
         )
 
     def post(self, request, *args, **kwargs):
         """Apply the submitted prices, then redirect back with a summary."""
+        shop = self._current_shop(request)
         updates = 0
-        for sp in ShopProduct.objects.select_related("shop", "product").all():
+        rows = ShopProduct.objects.select_related("shop", "product").all()
+        if shop is not None:
+            rows = rows.filter(shop=shop)
+        for sp in rows:
             prefix = f"shop_product-{sp.pk}-"
             cost_raw = request.POST.get(prefix + "cost_price")
             sell_raw = request.POST.get(prefix + "selling_price")
@@ -546,6 +581,8 @@ class ShopPricingView(OwnerRequiredMixin, View):
             messages.success(request, f"Saved prices for {updates} product(s).")
         else:
             messages.warning(request, "No price changes were submitted.")
+        if shop is not None:
+            return redirect(f"{reverse('shop_pricing')}?shop={shop.pk}")
         return redirect(reverse("shop_pricing"))
 
 
@@ -580,281 +617,261 @@ class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
 
 
 class ProductComparisonView(OwnerRequiredMixin, TemplateView):
-    """Product comparison across shops: profits, sales, and trends for selected products.
+    """Compare two products side by side across all shops or one shop.
 
-    Allows the owner to select up to 5 products and compare their performance
-    across all shops, showing profit, units sold, revenue, and trends.
-    Includes CSV export functionality.
+    The owner can search for Product A and Product B, optionally scope the
+    comparison to one shop, and view totals plus a daily profit chart and
+    per-shop breakdown. The legacy ``product_ids`` list is still supported so
+    older links and CSV exports keep working.
     """
 
     template_name = "tracker/product_comparison.html"
+
+    def _product_ids_from_request(self):
+        """Return the selected product ids, preferring A/B selectors."""
+        raw_ids = []
+        for name in ("product_a", "product_b"):
+            value = self.request.GET.get(name)
+            if not value:
+                continue
+            value = value.strip()
+            try:
+                raw_ids.append(int(value))
+                continue
+            except ValueError:
+                pass
+
+            match = MasterProduct.objects.filter(name__iexact=value).first()
+            if match is None:
+                match = MasterProduct.objects.filter(name__icontains=value).order_by("name").first()
+            if match is not None:
+                raw_ids.append(match.pk)
+        if raw_ids:
+            unique = []
+            seen = set()
+            for pid in raw_ids:
+                if pid not in seen:
+                    unique.append(pid)
+                    seen.add(pid)
+            return unique[:2]
+
+        product_ids = self.request.GET.getlist("product_ids")
+        try:
+            ids = [int(pid) for pid in product_ids]
+        except ValueError:
+            return []
+        return ids[:5]
+
+    def _selected_shop(self):
+        shop_id = self.request.GET.get("shop")
+        if not shop_id:
+            return None
+        try:
+            return Shop.objects.get(pk=int(shop_id))
+        except (Shop.DoesNotExist, ValueError):
+            return None
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         today = timezone.localdate()
         window_start = today - timedelta(days=OWNER_TREND_DAYS - 1)
 
-        # Get all shops and products
-        context["shops"] = Shop.objects.all().order_by("name")
+        all_shops = list(Shop.objects.all().order_by("name"))
+        selected_shop = self._selected_shop()
+        shops_in_scope = [selected_shop] if selected_shop else all_shops
+
+        context["shops"] = all_shops
         context["products"] = MasterProduct.objects.all().order_by("name", "category")
         context["selected_product_ids"] = []
+        context["selected_product_a"] = ""
+        context["selected_product_b"] = ""
+        context["selected_product_a_name"] = ""
+        context["selected_product_b_name"] = ""
+        context["selected_shop"] = selected_shop
+        context["scope_name"] = selected_shop.name if selected_shop else "All shops"
         context["comparison_data"] = []
-        context["trend_rows"] = []
+        context["chart_data"] = None
         context["today"] = today
-        context["max_products"] = 5
+        context["max_products"] = 2
 
-        # Get product IDs from request (up to 5)
-        product_ids = self.request.GET.getlist("product_ids", [])
+        product_ids = self._product_ids_from_request()
         if product_ids:
-            # Limit to 5 products max
-            product_ids = product_ids[:5]
-            context["selected_product_ids"] = [int(pid) for pid in product_ids]
+            valid = [
+                pid for pid in product_ids
+                if MasterProduct.objects.filter(pk=pid).exists()
+            ]
+            product_ids = valid[:2]
+            context["selected_product_ids"] = product_ids
+            if len(product_ids) > 0:
+                product_a = MasterProduct.objects.filter(pk=product_ids[0]).first()
+                context["selected_product_a"] = product_ids[0]
+                context["selected_product_a_name"] = product_a.name if product_a else ""
+            if len(product_ids) > 1:
+                product_b = MasterProduct.objects.filter(pk=product_ids[1]).first()
+                context["selected_product_b"] = product_ids[1]
+                context["selected_product_b_name"] = product_b.name if product_b else ""
 
-            # Get daily sales for selected products across all shops
-            sales = DailySale.objects.filter(
-                product_id__in=product_ids
-            ).select_related("product", "shop")
-
-            # Per-shop per-product aggregation
-            product_shop_data = sales.values(
-                "product_id",
-                "product__name",
-                "product__category",
-                "shop_id",
-                "shop__name",
-                "shop__location",
-            ).annotate(
-                profit=Sum("profit"),
-                units=Sum("units_sold"),
-                revenue=Sum("total_revenue"),
-            )
-
-            # Build comparison data structured by product
-            products_data = {}
-            for row in product_shop_data:
-                pid = row["product_id"]
-                if pid not in products_data:
-                    products_data[pid] = {
-                        "product_id": pid,
-                        "product_name": row["product__name"],
-                        "product_category": row["product__category"],
-                        "shops": {},
-                    }
-                products_data[pid]["shops"][row["shop_id"]] = {
-                    "shop_name": row["shop__name"],
-                    "shop_location": row["shop__location"],
-                    "profit": _money(row["profit"]),
-                    "units": _money(row["units"]),
-                    "revenue": _money(row["revenue"]),
-                }
-
-            # Build trend data (last 7 days per product)
-            trend_data = sales.filter(sale_date__gte=window_start).values(
-                "product_id", "shop_id", "sale_date"
-            ).annotate(
-                profit=Sum("profit"),
-                units=Sum("units_sold"),
-            )
-
-            # Organize trend by product and day
-            product_trends = {}
-            for row in trend_data:
-                pid = row["product_id"]
-                if pid not in product_trends:
-                    product_trends[pid] = {}
-                date = row["sale_date"]
-                if date not in product_trends[pid]:
-                    product_trends[pid][date] = {}
-                product_trends[pid][date][row["shop_id"]] = {
-                    "profit": _money(row["profit"]),
-                    "units": _money(row["units"]),
-                }
-
-            # Build trend rows for template
-            days = [window_start + timedelta(days=i) for i in range(OWNER_TREND_DAYS)]
-            for pid in products_data:
-                product = products_data[pid]
-                product["trend_data"] = []
-                for day in days:
-                    day_cells_profit = []
-                    day_cells_units = []
-                    for shop in context["shops"]:
-                        day_data = product_trends.get(pid, {}).get(day, {}).get(shop.pk, {})
-                        day_cells_profit.append(day_data.get("profit", Decimal("0.00")))
-                        day_cells_units.append(day_data.get("units", Decimal("0.00")))
-                    product["trend_data"].append(
-                        {
-                            "date": day,
-                            "profit_cells": day_cells_profit,
-                            "units_cells": day_cells_units,
-                            "profit_total": sum(day_cells_profit, Decimal("0.00")),
-                            "units_total": sum(day_cells_units, Decimal("0.00")),
-                        }
-                    )
-                # All-time per-shop cells, in ``shops`` order, so the template
-                # can walk the list instead of looking shops up by id.
-                product["shop_cells"] = [
-                    {
-                        "shop": shop,
-                        "profit": product["shops"].get(shop.pk, {}).get(
-                            "profit", Decimal("0.00")
-                        ),
-                        "units": product["shops"].get(shop.pk, {}).get(
-                            "units", Decimal("0.00")
-                        ),
-                        "revenue": product["shops"].get(shop.pk, {}).get(
-                            "revenue", Decimal("0.00")
-                        ),
-                    }
-                    for shop in context["shops"]
-                ]
-                product["total_revenue"] = sum(
-                    (cell["revenue"] for cell in product["shop_cells"]),
-                    Decimal("0.00"),
-                )
-                product["total_profit"] = sum(
-                    (cell["profit"] for cell in product["shop_cells"]),
-                    Decimal("0.00"),
-                )
-                product["total_units"] = sum(
-                    (cell["units"] for cell in product["shop_cells"]),
-                    Decimal("0.00"),
-                )
-                product["avg_profit_per_shop"] = (
-                    product["total_profit"] / len(context["shops"])
-                    if context["shops"]
-                    else Decimal("0.00")
-                )
-
-            context["comparison_data"] = list(products_data.values())
-            context["totals"] = {
-                "profit": sum(
-                    (p["total_profit"] for p in context["comparison_data"]),
-                    Decimal("0.00"),
-                ),
-                "units": sum(
-                    (p["total_units"] for p in context["comparison_data"]),
-                    Decimal("0.00"),
-                ),
-                "revenue": sum(
-                    (p["total_revenue"] for p in context["comparison_data"]),
-                    Decimal("0.00"),
-                ),
-            }
-
-        # CSV export URL
-        if context["selected_product_ids"]:
-            export_url = reverse("product_comparison_csv")
-            query = urlencode(
-                {"product_ids": context["selected_product_ids"]}, doseq=True
-            )
-            context["csv_export_url"] = f"{export_url}?{query}"
-        else:
+        if not product_ids:
             context["csv_export_url"] = ""
+            return context
 
-        return context
+        sales = DailySale.objects.filter(product_id__in=product_ids).select_related("product", "shop")
+        if selected_shop is not None:
+            sales = sales.filter(shop=selected_shop)
 
-    def get_csv_response(self, product_ids):
-        """Generate a CSV file for the selected products comparison."""
-        import csv
-        from io import StringIO
-
-        from django.http import HttpResponse
-
-        # Get daily sales for selected products across all shops
-        sales = DailySale.objects.filter(
-            product_id__in=product_ids
-        ).select_related("product", "shop")
-
-        # Build data structured by product and shop
-        output = StringIO()
-        writer = None
-
-        # Header row
-        shops = list(Shop.objects.all().order_by("name"))
-        headers = ["Product", "Category"] + [shop.name for shop in shops] + ["Total Profit", "Total Units", "Total Revenue"]
-        writer = csv.writer(output)
-        writer.writerow(headers)
-
-        # Per-shop per-product aggregation
-        product_shop_data = sales.values(
+        shop_profit_data = sales.values(
             "product_id",
             "product__name",
             "product__category",
             "shop_id",
             "shop__name",
-            "shop__location",
         ).annotate(
             profit=Sum("profit"),
             units=Sum("units_sold"),
             revenue=Sum("total_revenue"),
         )
 
-        # Organize by product
         products_data = {}
-        for row in product_shop_data:
+        for row in shop_profit_data:
             pid = row["product_id"]
             if pid not in products_data:
                 products_data[pid] = {
+                    "product_id": pid,
                     "product_name": row["product__name"],
                     "product_category": row["product__category"],
-                    "shops": {},
+                    "shop_cells": [],
+                    "total_profit": Decimal("0.00"),
+                    "total_units": Decimal("0.00"),
+                    "total_revenue": Decimal("0.00"),
                 }
-            products_data[pid]["shops"][row["shop_id"]] = {
-                "shop_name": row["shop__name"],
-                "profit": _money(row["profit"]),
-                "units": _money(row["units"]),
-                "revenue": _money(row["revenue"]),
-            }
+            products_data[pid]["shop_cells"].append(
+                {
+                    "shop": Shop.objects.get(pk=row["shop_id"]),
+                    "profit": _money(row["profit"]),
+                    "units": _money(row["units"]),
+                    "revenue": _money(row["revenue"]),
+                }
+            )
 
-        # Write rows per product
-        for pid, product in products_data.items():
-            row = [product["product_name"], product["product_category"]]
-            shop_profits = []
-            for shop in shops:
-                sp = product["shops"].get(shop.pk, {})
-                row.append(sp.get("profit", "0.00"))
-                shop_profits.append(float(sp.get("profit", 0)))
-            row.append(sum(shop_profits))  # Total Profit
-            # Total units - sum across all shop rows for this product
-            total_units = Decimal("0.00")
-            for shop in shops:
-                sp = product["shops"].get(shop.pk, {})
-                total_units += sp.get("units", Decimal("0.00"))
-            row.append(total_units)  # Total Units
-            # Total revenue - sum across all shop rows for this product
-            total_revenue = Decimal("0.00")
-            for shop in shops:
-                sp = product["shops"].get(shop.pk, {})
-                total_revenue += sp.get("revenue", Decimal("0.00"))
-            row.append(total_revenue)  # Total Revenue
-            writer.writerow(row)
+        for pid in product_ids:
+            product = products_data.get(
+                pid,
+                {
+                    "product_id": pid,
+                    "product_name": MasterProduct.objects.get(pk=pid).name,
+                    "product_category": MasterProduct.objects.get(pk=pid).category,
+                    "shop_cells": [],
+                    "total_profit": Decimal("0.00"),
+                    "total_units": Decimal("0.00"),
+                    "total_revenue": Decimal("0.00"),
+                },
+            )
+            if not product["shop_cells"]:
+                product["shop_cells"] = [
+                    {"shop": shop, "profit": Decimal("0.00"), "units": Decimal("0.00"), "revenue": Decimal("0.00")}
+                    for shop in shops_in_scope
+                ]
+            else:
+                by_shop = {cell["shop"].pk: cell for cell in product["shop_cells"]}
+                product["shop_cells"] = [
+                    {
+                        "shop": shop,
+                        "profit": by_shop.get(shop.pk, {}).get("profit", Decimal("0.00")),
+                        "units": by_shop.get(shop.pk, {}).get("units", Decimal("0.00")),
+                        "revenue": by_shop.get(shop.pk, {}).get("revenue", Decimal("0.00")),
+                    }
+                    for shop in shops_in_scope
+                ]
+            product["total_profit"] = sum((cell["profit"] for cell in product["shop_cells"]), Decimal("0.00"))
+            product["total_units"] = sum((cell["units"] for cell in product["shop_cells"]), Decimal("0.00"))
+            product["total_revenue"] = sum((cell["revenue"] for cell in product["shop_cells"]), Decimal("0.00"))
+            product["avg_profit_per_shop"] = (
+                product["total_profit"] / len(product["shop_cells"])
+                if product["shop_cells"]
+                else Decimal("0.00")
+            )
+            products_data[pid] = product
 
-        # Determine filename
-        product_names = "+".join(
-            MasterProduct.objects.filter(id__in=product_ids).values_list("name", flat=True)[:5]
+        ordered_products = [products_data[pid] for pid in product_ids if pid in products_data]
+        context["comparison_data"] = ordered_products
+        context["totals"] = {
+            "profit": sum((p["total_profit"] for p in ordered_products), Decimal("0.00")),
+            "units": sum((p["total_units"] for p in ordered_products), Decimal("0.00")),
+            "revenue": sum((p["total_revenue"] for p in ordered_products), Decimal("0.00")),
+        }
+
+        trend_days = [window_start + timedelta(days=i) for i in range(OWNER_TREND_DAYS)]
+        datasets = []
+        for product in ordered_products:
+            values = []
+            for day in trend_days:
+                per_day = sales.filter(product_id=product["product_id"], sale_date=day).aggregate(
+                    profit=Sum("profit"), units=Sum("units_sold")
+                )
+                values.append(float(_money(per_day["profit"] or Decimal("0.00"))))
+            datasets.append(
+                {
+                    "label": f"{product['product_name']} ({product['product_category'] or 'No category'})",
+                    "data": values,
+                }
+            )
+        context["chart_data"] = {
+            "labels": [day.strftime("%d %b") for day in trend_days],
+            "datasets": datasets,
+        }
+
+        export_url = reverse("product_comparison_csv")
+        params = urlencode(
+            {
+                "product_a": context["selected_product_a"],
+                "product_b": context["selected_product_b"],
+                "shop": selected_shop.pk if selected_shop else "",
+            },
+            doseq=True,
         )
-        filename = f"product_comparison_{product_names}.csv"
-
-        response = HttpResponse(output.getvalue(), content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        return response
+        if params:
+            context["csv_export_url"] = f"{export_url}?{params}"
+        else:
+            context["csv_export_url"] = export_url
+        return context
 
 
 class ProductComparisonCSVView(OwnerRequiredMixin, View):
     """Download the comparison table for the selected products as a CSV."""
 
     def get(self, request, *args, **kwargs):
-        """Return the CSV for up to five ``product_ids`` query parameters."""
         from django.http import HttpResponseBadRequest
 
-        try:
-            product_ids = [int(pid) for pid in request.GET.getlist("product_ids")][:5]
-        except ValueError:
-            return HttpResponseBadRequest("Invalid product id")
+        product_ids = []
+        for name in ("product_a", "product_b"):
+            raw = request.GET.get(name)
+            if not raw:
+                continue
+            try:
+                product_ids.append(int(raw))
+            except ValueError:
+                return HttpResponseBadRequest("Invalid product id")
+
+        if not product_ids:
+            try:
+                product_ids = [int(pid) for pid in request.GET.getlist("product_ids")][:5]
+            except ValueError:
+                return HttpResponseBadRequest("Invalid product id")
 
         if not product_ids:
             return HttpResponseBadRequest("Select at least one product")
+
+        selected_shop_id = request.GET.get("shop")
+        if selected_shop_id:
+            try:
+                selected_shop = Shop.objects.get(pk=int(selected_shop_id))
+            except (Shop.DoesNotExist, ValueError):
+                selected_shop = None
+        else:
+            selected_shop = None
+
+        if selected_shop is not None:
+            product_ids = list(dict.fromkeys(product_ids))[:2]
 
         return ProductComparisonView().get_csv_response(product_ids)
 
@@ -965,4 +982,236 @@ class ProductReportCSVView(OwnerRequiredMixin, View):
 
         response = HttpResponse(output.getvalue(), content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="product_report.csv"'
+        return response
+
+
+def _shop_report_data(shop):
+    """Return per-day and per-product aggregates for one shop's report.
+
+    Returns ``(day_rows, top_products, totals)``:
+
+    * ``day_rows`` -- one row per trading day, newest first: profit, units
+      and revenue for that date.
+    * ``top_products`` -- the shop's best sellers ordered by units sold.
+    * ``totals`` -- the shop's all-time profit, units and revenue.
+    """
+    sales = DailySale.objects.filter(shop=shop)
+
+    day_rows = list(
+        sales.values("sale_date")
+        .annotate(profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue"))
+        .order_by("-sale_date")
+    )
+    for row in day_rows:
+        row["profit"] = _money(row["profit"])
+        row["units"] = _money(row["units"])
+        row["revenue"] = _money(row["revenue"])
+
+    top_products = list(
+        sales.values("product_id", "product__name", "product__category")
+        .annotate(
+            units=Sum("units_sold"),
+            revenue=Sum("total_revenue"),
+            profit=Sum("profit"),
+        )
+        .order_by("-units")[:SHOP_TOP_PRODUCTS]
+    )
+    for row in top_products:
+        row["units"] = _money(row["units"])
+        row["revenue"] = _money(row["revenue"])
+        row["profit"] = _money(row["profit"])
+
+    totals = sales.aggregate(profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue"))
+    return day_rows, top_products, {
+        "profit": _money(totals["profit"]),
+        "units": _money(totals["units"]),
+        "revenue": _money(totals["revenue"]),
+    }
+
+
+class ShopDetailView(OwnerRequiredMixin, DetailView):
+    """One shop's full report: KPIs, most sold products, dated profits.
+
+    Reached from the owner dashboard's shop cards. The page also carries an
+    in-shop comparison: ``?compare=<pk>&compare=<pk>`` (up to four products
+    the owner picks) shows those products side by side -- all-time totals
+    plus a daily profit chart -- within this shop only.
+    """
+
+    model = Shop
+    template_name = "tracker/shop_detail.html"
+    context_object_name = "shop"
+
+    #: Upper bound on products the in-shop comparison accepts.
+    MAX_COMPARE = 4
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        shop = self.object
+        today = timezone.localdate()
+        week_start = today - timedelta(days=OWNER_TREND_DAYS - 1)
+        sales = _shop_sales(shop)
+
+        context["today"] = today
+        context["week_start"] = week_start
+
+        today_row = sales.filter(sale_date=today).aggregate(
+            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+        )
+        context["today_profit"] = _money(today_row["profit"])
+        context["today_units"] = _money(today_row["units"])
+        context["today_revenue"] = _money(today_row["revenue"])
+
+        week_row = sales.filter(sale_date__gte=week_start).aggregate(
+            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+        )
+        context["week_profit"] = _money(week_row["profit"])
+        context["week_units"] = _money(week_row["units"])
+        context["week_revenue"] = _money(week_row["revenue"])
+
+        day_rows, top_products, totals = _shop_report_data(shop)
+        context["total_profit"] = totals["profit"]
+        context["total_units"] = totals["units"]
+        context["total_revenue"] = totals["revenue"]
+        context["top_products"] = top_products
+        context["day_count"] = len(day_rows)
+
+        # Dated profit table, paginated so years of history stay usable.
+        paginator = Paginator(day_rows, SHOP_DETAIL_PAGE_SIZE)
+        page_number = self.request.GET.get("page", 1)
+        page = paginator.get_page(page_number)
+        context["page_obj"] = page
+        context["day_rows"] = page.object_list
+        context["is_paginated"] = paginator.num_pages > 1
+
+        # The shop's price card feeds the comparison picker.
+        context["shop_products"] = list(
+            ShopProduct.objects.filter(shop=shop, is_active=True)
+            .select_related("product")
+            .order_by("product__name", "product__category")
+        )
+
+        # --- In-shop product comparison (up to 4 products) ---
+        compare_ids = []
+        for raw in self.request.GET.getlist("compare"):
+            try:
+                compare_ids.append(int(raw))
+            except ValueError:
+                continue
+        compare_ids = compare_ids[: self.MAX_COMPARE]
+        context["max_compare"] = self.MAX_COMPARE
+        context["compare_ids"] = compare_ids
+
+        if compare_ids:
+            available = {sp.product_id for sp in context["shop_products"]}
+            compare_ids = [pk for pk in compare_ids if pk in available]
+            context["compare_ids"] = compare_ids
+        if compare_ids:
+            compare_rows = list(
+                sales.filter(product_id__in=compare_ids)
+                .values("product_id", "product__name", "product__category")
+                .annotate(
+                    units=Sum("units_sold"),
+                    revenue=Sum("total_revenue"),
+                    profit=Sum("profit"),
+                )
+            )
+            by_id = {row["product_id"]: row for row in compare_rows}
+
+            chart_start = today - timedelta(days=OWNER_CHART_DAYS - 1)
+            chart_days = [chart_start + timedelta(days=i) for i in range(OWNER_CHART_DAYS)]
+            per_day = {
+                (row["product_id"], row["sale_date"]): _money(row["profit"])
+                for row in sales.filter(product_id__in=compare_ids, sale_date__gte=chart_start)
+                .values("product_id", "sale_date")
+                .annotate(profit=Sum("profit"))
+            }
+
+            products = []
+            for pk in compare_ids:
+                row = by_id.get(pk)
+                if row is None:
+                    continue
+                products.append(
+                    {
+                        "product_id": pk,
+                        "name": row["product__name"],
+                        "category": row["product__category"],
+                        "units": _money(row["units"]),
+                        "revenue": _money(row["revenue"]),
+                        "profit": _money(row["profit"]),
+                    }
+                )
+            context["comparison_data"] = products
+            context["comparison_chart"] = {
+                "labels": [day.strftime("%d %b") for day in chart_days],
+                "datasets": [
+                    {
+                        "label": (
+                            f"{p['name']} · {p['category']}" if p["category"] else p["name"]
+                        ),
+                        "data": [
+                            float(per_day.get((p["product_id"], day), Decimal("0.00")))
+                            for day in chart_days
+                        ],
+                    }
+                    for p in products
+                ],
+            }
+        else:
+            context["comparison_data"] = []
+            context["comparison_chart"] = None
+
+        context["csv_export_url"] = reverse("shop_report_csv", args=[shop.pk])
+        context["pricing_url"] = f"{reverse('shop_pricing')}?shop={shop.pk}"
+        return context
+
+
+class ShopReportCSVView(OwnerRequiredMixin, View):
+    """Download one shop's dated profit report and product totals as CSV."""
+
+    def get(self, request, pk=None, *args, **kwargs):
+        shop_pk = kwargs.get("shop_pk", pk)
+        if shop_pk is None:
+            raise Http404("Shop not found.")
+        shop = get_object_or_404(Shop, pk=shop_pk)
+        day_rows, top_products, totals = _shop_report_data(shop)
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow([f"{shop.name} — profit report"])
+        writer.writerow(["Section", "Product", "Category", "Date", "Units", "Revenue", "Profit"])
+        for row in top_products:
+            writer.writerow(
+                [
+                    "Most sold",
+                    row["product__name"],
+                    row["product__category"],
+                    "",
+                    f"{row['units']:.2f}",
+                    f"{row['revenue']:.2f}",
+                    f"{row['profit']:.2f}",
+                ]
+            )
+        for row in day_rows:
+            writer.writerow(
+                [
+                    "Daily totals",
+                    "",
+                    "",
+                    row["sale_date"],
+                    f"{row['units']:.2f}",
+                    f"{row['revenue']:.2f}",
+                    f"{row['profit']:.2f}",
+                ]
+            )
+        writer.writerow(
+            ["Shop totals", "", "", "", f"{totals['units']:.2f}",
+             f"{totals['revenue']:.2f}", f"{totals['profit']:.2f}"]
+        )
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="shop_report_{shop.name.lower().replace(" ", "_")}.csv"'
+        )
         return response

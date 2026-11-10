@@ -7,13 +7,29 @@
 <div class="mb-6">
     <h1 class="text-2xl font-bold tracking-tight text-slate-900">Shop Pricing</h1>
     <p class="text-sm text-slate-500">
-        Set the cost and selling price each shop uses. Saving here never changes profit that has
+        Each shop sells at its own prices. Saving here never changes profit that has
         already been recorded — sales keep the prices locked in at the time they were made.
     </p>
 </div>
 
+<div class="mb-6 flex flex-wrap gap-2">
+    <a href="{% url 'shop_pricing' %}"
+       class="rounded-full px-4 py-1.5 text-sm font-medium {% if not current_shop %}bg-slate-900 text-white{% else %}bg-white text-slate-600 shadow hover:text-slate-900{% endif %}">
+        All shops
+    </a>
+    {% for shop in shops %}
+    <a href="{% url 'shop_pricing' %}?shop={{ shop.pk }}"
+       class="rounded-full px-4 py-1.5 text-sm font-medium {% if current_shop and current_shop.pk == shop.pk %}bg-slate-900 text-white{% else %}bg-white text-slate-600 shadow hover:text-slate-900{% endif %}">
+        {{ shop.name }}
+    </a>
+    {% endfor %}
+</div>
+
 <form method="post">
     {% csrf_token %}
+    {% if current_shop %}
+    <input type="hidden" name="shop" value="{{ current_shop.pk }}">
+    {% endif %}
 
     {% for shop, shop_products in grouped_products.items %}
         <div class="mb-6 rounded-xl bg-white shadow">

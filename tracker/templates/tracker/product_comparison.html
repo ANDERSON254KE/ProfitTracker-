@@ -6,68 +6,117 @@
 {% block content %}
 <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
     <div>
-        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Product Comparison</h1>
-        <p class="text-sm text-slate-500">Compare profit, sales and trends for selected products across all shops</p>
-    </div>
-
-    <form method="get" class="flex flex-wrap items-end gap-3">
-        <div class="rounded-lg border bg-white p-3 shadow-sm">
-            <label for="productSelect" class="mb-2 block text-xs font-medium text-slate-600">
-                Select up to {{ max_products }} products
-            </label>
-            <select id="productSelect" name="product_ids" multiple size="8"
-                    class="w-64 rounded border p-2 text-sm focus:border-indigo-500 focus:ring-indigo-500">
-                {% for product in products %}
-                <option value="{{ product.id }}" {% if product.id in selected_product_ids %}selected{% endif %}>
-                    {{ product.name }}{% if product.category %} — {{ product.category }}{% endif %}
-                </option>
-                {% endfor %}
-            </select>
-        </div>
-        <button type="submit"
-                class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
-            Compare
-        </button>
-        {% if csv_export_url %}
-        <a href="{{ csv_export_url }}" download
-           class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
-            CSV Export
-        </a>
-        {% endif %}
-    </form>
-</div>
-
-{% if totals %}
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-    <div class="rounded-xl bg-white p-5 shadow">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Profit</p>
-        <p class="mt-2 text-2xl font-bold {% if totals.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-            {{ totals.profit|ksh }}
+        <p class="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-600">Insights</p>
+        <h1 class="text-3xl font-bold tracking-tight text-slate-900">Product comparison</h1>
+        <p class="mt-1 text-sm text-slate-500">
+            Compare Product A vs Product B across all shops or a single shop.
         </p>
     </div>
-    <div class="rounded-xl bg-white p-5 shadow">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Units</p>
-        <p class="mt-2 text-2xl font-bold text-slate-900">{{ totals.units|units }}</p>
-    </div>
-    <div class="rounded-xl bg-white p-5 shadow">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Revenue</p>
-        <p class="mt-2 text-2xl font-bold text-slate-900">{{ totals.revenue|ksh }}</p>
-    </div>
+
+    <form method="get" class="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ring-1 ring-slate-100">
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+                <label for="productA" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Product A
+                </label>
+                <input id="productA" name="product_a" list="product-options" value="{{ selected_product_a_name }}"
+                       placeholder="Search product A..."
+                       class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
+            </div>
+
+            <div>
+                <label for="productB" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Product B
+                </label>
+                <input id="productB" name="product_b" list="product-options" value="{{ selected_product_b_name }}"
+                       placeholder="Search product B..."
+                       class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
+            </div>
+
+            <div>
+                <label for="shopFilter" class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Shop Scope
+                </label>
+                <select id="shopFilter" name="shop"
+                        class="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100">
+                    <option value="" {% if not selected_shop %}selected{% endif %}>All shops</option>
+                    {% for shop in shops %}
+                    <option value="{{ shop.pk }}" {% if selected_shop and selected_shop.pk == shop.pk %}selected{% endif %}>
+                        {{ shop.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button type="submit"
+                    class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+                Compare
+            </button>
+            {% if csv_export_url %}
+            <a href="{{ csv_export_url }}" download
+               class="inline-flex items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100">
+                CSV Export
+            </a>
+            {% endif %}
+            <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+                Scope: {{ scope_name }}
+            </span>
+        </div>
+    </form>
+    <datalist id="product-options">
+        {% for product in products %}
+        <option value="{{ product.name }}{% if product.category %} — {{ product.category }}{% endif %}"></option>
+        {% endfor %}
+    </datalist>
 </div>
 
-<div class="mt-6 overflow-hidden rounded-xl bg-white shadow">
+{% if comparison_data %}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+    {% for product in comparison_data %}
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{{ product.product_name }}</p>
+        <p class="mt-1 text-sm text-slate-500">{{ product.product_category|default:"—" }}</p>
+        <p class="mt-3 text-2xl font-bold {% if product.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+            {{ product.total_profit|ksh }}
+        </p>
+        <div class="mt-3 space-y-1 text-sm text-slate-600">
+            <div>Units: {{ product.total_units|units }}</div>
+            <div>Revenue: {{ product.total_revenue|ksh }}</div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if chart_data and chart_data.datasets %}
+<div class="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-100">
+    <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-base font-semibold text-slate-900">7-day profit trend</h2>
+        <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{{ scope_name }}</span>
+    </div>
+    <div class="h-80">
+        <canvas id="productComparisonChart"></canvas>
+    </div>
+</div>
+{% endif %}
+
+<div class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ring-1 ring-slate-100">
     <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Profit by Shop</h2>
+        <h2 class="text-base font-semibold text-slate-900">Profit by shop</h2>
     </div>
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                     <th class="px-5 py-3 text-left font-semibold">Product</th>
-                    <th class="px-5 py-3 text-left font-semibold">Category</th>
+                    {% if selected_shop %}
+                    <th class="px-5 py-3 text-right font-semibold">{{ selected_shop.name }}</th>
+                    {% else %}
                     {% for shop in shops %}
                     <th class="px-5 py-3 text-right font-semibold">{{ shop.name }}</th>
                     {% endfor %}
+                    {% endif %}
                     <th class="px-5 py-3 text-right font-semibold">Total Profit</th>
                     <th class="px-5 py-3 text-right font-semibold">Units</th>
                 </tr>
@@ -76,12 +125,21 @@
                 {% for product in comparison_data %}
                 <tr class="hover:bg-slate-50">
                     <td class="px-5 py-3 font-medium text-slate-900">{{ product.product_name }}</td>
-                    <td class="px-5 py-3 text-xs text-slate-500">{{ product.product_category|default:"—" }}</td>
+                    {% if selected_shop %}
+                    {% for cell in product.shop_cells %}
+                    {% if cell.shop.pk == selected_shop.pk %}
+                    <td class="px-5 py-3 text-right {% if cell.profit < 0 %}text-rose-600{% else %}text-slate-700{% endif %}">
+                        {{ cell.profit|ksh }}
+                    </td>
+                    {% endif %}
+                    {% endfor %}
+                    {% else %}
                     {% for cell in product.shop_cells %}
                     <td class="px-5 py-3 text-right {% if cell.profit < 0 %}text-rose-600{% else %}text-slate-700{% endif %}">
                         {{ cell.profit|ksh }}
                     </td>
                     {% endfor %}
+                    {% endif %}
                     <td class="px-5 py-3 text-right font-semibold {% if product.total_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
                         {{ product.total_profit|ksh }}
                     </td>
@@ -93,99 +151,82 @@
     </div>
 </div>
 
-<div class="mt-6 overflow-hidden rounded-xl bg-white shadow">
-    <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Last 7 Days</h2>
-    </div>
-    <div class="space-y-6 p-5">
-        {% for product in comparison_data %}
-        <div>
-            <h3 class="mb-2 text-sm font-semibold text-slate-900">
-                {{ product.product_name }}{% if product.product_category %} — {{ product.product_category }}{% endif %}
-            </h3>
-            <div class="overflow-x-auto">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                        <tr>
-                            <th class="px-3 py-2 text-left font-semibold">Date</th>
-                            {% for shop in shops %}
-                            <th class="px-3 py-2 text-right font-semibold">{{ shop.name }}</th>
-                            {% endfor %}
-                            <th class="px-3 py-2 text-right font-semibold">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100">
-                        {% for day in product.trend_data %}
-                        <tr class="{% if day.date == today %}bg-indigo-50{% else %}hover:bg-slate-50{% endif %}">
-                            <td class="whitespace-nowrap px-3 py-2 font-medium text-slate-900">
-                                {{ day.date|date:"D d M" }}{% if day.date == today %}
-                                <span class="ml-1 text-xs text-indigo-600">today</span>{% endif %}
-                            </td>
-                            {% for value in day.profit_cells %}
-                            <td class="px-3 py-2 text-right {% if value < 0 %}text-rose-600{% else %}text-slate-700{% endif %}">
-                                {{ value|ksh }}
-                            </td>
-                            {% endfor %}
-                            <td class="px-3 py-2 text-right font-semibold text-slate-900">{{ day.profit_total|ksh }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-
-<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    {% for product in comparison_data %}
-    <div class="rounded-xl bg-white p-4 shadow">
-        <h3 class="mb-3 font-semibold text-slate-900">
-            {{ product.product_name }}{% if product.product_category %} — {{ product.product_category }}{% endif %}
-        </h3>
-        <div class="grid grid-cols-2 gap-3 text-sm">
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Profit</p>
-                <p class="mt-1 font-bold {% if product.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                    {{ product.total_profit|ksh }}
-                </p>
-            </div>
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Units</p>
-                <p class="mt-1 font-bold text-slate-900">{{ product.total_units|units }}</p>
-            </div>
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Revenue</p>
-                <p class="mt-1 font-bold text-slate-900">{{ product.total_revenue|ksh }}</p>
-            </div>
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Avg Profit/Shop</p>
-                <p class="mt-1 font-bold {% if product.avg_profit_per_shop < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                    {{ product.avg_profit_per_shop|ksh }}
-                </p>
-            </div>
-        </div>
-
-        <div class="mt-4">
-            <p class="mb-2 text-xs font-medium text-slate-600">Performance by Shop</p>
-            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {% for cell in product.shop_cells %}
-                <div class="rounded bg-slate-100 p-2 text-center text-xs">
-                    <p class="font-semibold text-slate-800">{{ cell.shop.name }}</p>
-                    <p class="font-medium {% if cell.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                        {{ cell.profit|ksh }}
-                    </p>
-                    <p class="text-slate-500">{{ cell.units|units }} units</p>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-    </div>
-    {% endfor %}
-</div>
+{% if chart_data and chart_data.datasets %}
+{{ chart_data|json_script:"product-comparison-chart" }}
+{% endif %}
 {% else %}
 <div class="mt-6 rounded-xl bg-white p-8 text-center shadow">
-    <p class="text-slate-500">Select one or more products above and press Compare.</p>
+    <p class="text-slate-500">Search for Product A and Product B, then press Compare.</p>
 </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if chart_data and chart_data.datasets %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const chartData = JSON.parse(document.getElementById('product-comparison-chart').textContent);
+  const ctx = document.getElementById('productComparisonChart');
+  if (!ctx || !chartData || !chartData.datasets || !chartData.datasets.length) {
+    return;
+  }
+  const palette = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: chartData.labels,
+      datasets: chartData.datasets.map((dataset, index) => ({
+        ...dataset,
+        borderColor: palette[index % palette.length],
+        backgroundColor: palette[index % palette.length] + '22',
+        pointBackgroundColor: palette[index % palette.length],
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
+        tension: 0.35,
+        borderWidth: 3,
+        fill: false,
+        pointRadius: 4,
+        hoverRadius: 6,
+      })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            usePointStyle: true,
+            pointStyle: 'circle',
+            boxWidth: 8,
+            color: '#475569',
+            padding: 16,
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (context) => `${context.dataset.label}: KSh ${Number(context.parsed.y).toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false, drawBorder: false },
+          ticks: { color: '#64748b', font: { size: 11 } },
+        },
+        y: {
+          grid: { color: '#e2e8f0', drawBorder: false },
+          ticks: {
+            color: '#64748b',
+            callback: (value) => 'KSh ' + Number(value).toLocaleString(),
+          },
+        },
+      },
+    },
+  });
+})();
+</script>
 {% endif %}
 {% endblock %}

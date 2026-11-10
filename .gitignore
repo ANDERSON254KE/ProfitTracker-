@@ -7,9 +7,14 @@ __pycache__/
 venv/
 env/
 .env
+.env.local
 
 # Database
 db.sqlite3
+
+# Local/generated project data
+.vercel/
+backups/
 
 # OS
 .DS_Store
