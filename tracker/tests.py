@@ -1160,6 +1160,25 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertContains(response, "grid-template-columns: repeat(2, minmax(0, 1fr))")
         self.assertContains(response, "border border-slate-400")
 
+    def test_profit_sheet_has_global_and_per_category_search(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
+        self.assertContains(response, 'id="allProductSearch"')
+        self.assertContains(response, "data-category-search")
+        self.assertContains(response, "data-product-search=")
+
+    def test_profit_sheet_link_is_available_in_mobile_navigation(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
+        self.assertContains(response, 'aria-label="Mobile navigation"')
+        self.assertContains(response, reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
+
+    def test_owner_has_profit_sheets_navigation_link(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("product_report"))
+        self.assertContains(response, "Profit Sheets")
+        self.assertContains(response, 'aria-label="Mobile navigation"')
+
 
 class PriceListCatalogueSyncTests(BaseDataTestCase):
     """New workbook products are added without changing shop price overrides."""

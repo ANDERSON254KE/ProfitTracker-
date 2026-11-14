@@ -131,9 +131,18 @@
         {% csrf_token %}
         <input type="hidden" name="date" value="{{ selected_date }}">
         <input type="hidden" name="action" value="save_sales">
+        <div class="border-b border-slate-200 bg-slate-50 p-4">
+            <label for="allProductSearch" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Search all categories</label>
+            <input id="allProductSearch" type="search" placeholder="Search by product or category..." autocomplete="off"
+                   class="w-full max-w-xl rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100">
+        </div>
         {% for group in category_groups %}
-        <div class="border-b border-slate-200 last:border-b-0">
-            <h3 class="bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800">{{ group.category }}</h3>
+        <div class="product-category-group border-b border-slate-200 last:border-b-0">
+            <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4 py-3">
+                <h3 class="text-sm font-semibold text-slate-800">{{ group.category }}</h3>
+                <input type="search" data-category-search placeholder="Search {{ group.category }}..." aria-label="Search {{ group.category }} products" autocomplete="off"
+                       class="w-full max-w-xs rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100">
+            </div>
             <div class="overflow-x-auto">
             <table class="sheet-responsive-table min-w-full divide-y divide-slate-200 text-sm">
                 <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
@@ -146,7 +155,7 @@
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     {% for row in group.rows %}
-                    <tr class="hover:bg-slate-50">
+                    <tr class="product-search-row hover:bg-slate-50" data-product-search="{{ row.card.product.name|lower }} {{ row.card.product.category|lower }}">
                         <td class="sheet-product-cell px-4 py-3 font-medium text-slate-900">{{ row.card.product.name }} <span class="text-xs font-normal text-slate-500">{{ row.card.product.category }}</span>
                             {% if row.stock_entry %}<span class="ml-1 text-xs text-amber-700">Stock sheet entry</span>{% endif %}
                         </td>
@@ -173,6 +182,39 @@
     <p class="p-6 text-sm text-slate-500">No active, priced products are available for this shop.</p>
     {% endif %}
 </section>
+
+{% if has_products %}
+<script>
+(function () {
+    const allSearch = document.getElementById("allProductSearch");
+    const groups = document.querySelectorAll(".product-category-group");
+
+    function filterProducts() {
+        const allQuery = allSearch.value.trim().toLocaleLowerCase();
+        groups.forEach(function (group) {
+            const categorySearch = group.querySelector("[data-category-search]");
+            const categoryQuery = categorySearch.value.trim().toLocaleLowerCase();
+            const rows = group.querySelectorAll(".product-search-row");
+            let visible = 0;
+
+            rows.forEach(function (row) {
+                const searchText = row.dataset.productSearch || "";
+                const matches = searchText.includes(allQuery) && searchText.includes(categoryQuery);
+                row.classList.toggle("hidden", !matches);
+                if (matches) visible += 1;
+            });
+
+            group.classList.toggle("hidden", visible === 0);
+        });
+    }
+
+    allSearch.addEventListener("input", filterProducts);
+    document.querySelectorAll("[data-category-search]").forEach(function (input) {
+        input.addEventListener("input", filterProducts);
+    });
+})();
+</script>
+{% endif %}
 
 {% if unpriced_products %}
 <section class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-5">
