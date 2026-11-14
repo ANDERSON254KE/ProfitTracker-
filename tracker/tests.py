@@ -734,6 +734,39 @@ class ProductReportTests(BaseDataTestCase):
         # Best mover comes first.
         self.assertEqual(response.context["rows"][0]["product"], self.gilbeys)
 
+    def test_selected_period_filters_per_product_profit_table(self):
+        today = timezone.localdate()
+        earlier = today - timedelta(days=4)
+        previous_sale = DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            units_sold=Decimal("1"),
+            unit_cost_at_sale=Decimal("450.00"),
+            unit_price_at_sale=Decimal("550.00"),
+            recorded_by=self.fig_manager,
+        )
+        DailySale.objects.filter(pk=previous_sale.pk).update(sale_date=earlier)
+
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_report"),
+            {"start_date": today.isoformat(), "end_date": today.isoformat()},
+        )
+        row = next(item for item in response.context["rows"] if item["product"] == self.gilbeys)
+        cells = {cell["shop"].pk: cell for cell in row["shop_cells"]}
+        self.assertEqual(cells[self.fig_tree.pk]["profit"], Decimal("200.00"))
+        self.assertEqual(cells[self.empire.pk]["profit"], Decimal("1500.00"))
+        self.assertEqual(row["total_profit"], Decimal("1700.00"))
+        self.assertContains(response, f"{today.isoformat()} to {today.isoformat()}")
+
+        csv_response = self.client.get(
+            reverse("product_report_csv"),
+            {"start_date": today.isoformat(), "end_date": today.isoformat()},
+        )
+        csv_rows = csv_response.content.decode().splitlines()
+        self.assertEqual(csv_rows[0], f"From,{today.isoformat()},To,{today.isoformat()}")
+        self.assertIn("1700.00", next(line for line in csv_rows if line.startswith("Gilbeys")))
+
     def test_products_with_no_sales_are_included_with_zero_cells(self):
         self.client.force_login(self.owner)
         response = self.client.get(reverse("product_report"))
@@ -763,7 +796,7 @@ class ProductReportTests(BaseDataTestCase):
 
         lines = response.content.decode().splitlines()
         self.assertEqual(
-            lines[0], "Product,Category,Empire Shop profit,Fig Tree profit,"
+            lines[1], "Product,Category,Empire Shop profit,Fig Tree profit,"
                       "Total Profit,Total Units,Total Revenue"
         )
         gilbeys_row = next(line for line in lines if line.startswith("Gilbeys"))
@@ -997,46 +1030,41 @@ class ShopProfitSheetTests(BaseDataTestCase):
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
         response = self.client.get(
             url,
-            {"date": end.isoformat(), "expense_start": start.isoformat(), "expense_end": end.isoformat()},
+            {"date": end.isoformat()},
         )
-        self.assertEqual(len(response.context["expense_range_rows"]), 3)
-        self.assertEqual(response.context["expense_range_rows"][1]["existing_total"], Decimal("25.00"))
+        self.assertEqual(len(response.context["expense_range_rows"]), 1)
+        self.assertEqual(response.context["expense_range_rows"][0]["existing_total"], Decimal("0.00"))
 
         response = self.client.post(
             url,
             {
                 "date": end.isoformat(),
                 "action": "calculate_daily_profit",
-                "expense_start": start.isoformat(),
-                "expense_end": end.isoformat(),
-                f"expense_total_{start.isoformat()}": "100.00",
-                f"expense_total_{middle.isoformat()}": "35.00",
                 f"expense_total_{end.isoformat()}": "250.00",
                 f"units_{self.gilbeys.pk}": "2",
             },
         )
         self.assertRedirects(
             response,
-            f"{url}?date={end.isoformat()}&expense_start={start.isoformat()}&expense_end={end.isoformat()}",
+            f"{url}?date={end.isoformat()}",
         )
         totals = dict(
             ShopExpense.objects.filter(shop=self.fig_tree, expense_date__range=(start, end))
             .values_list("expense_date")
             .annotate(total=Sum("amount"))
         )
-        self.assertEqual(totals[start], Decimal("100.00"))
-        self.assertEqual(totals[middle], Decimal("35.00"))
         self.assertEqual(totals[end], Decimal("250.00"))
-        self.assertEqual(ShopExpense.objects.filter(shop=self.fig_tree, expense_date=middle).count(), 2)
+        self.assertEqual(totals[middle], Decimal("25.00"))
+        self.assertNotIn(start, totals)
         legacy_expense.refresh_from_db()
         self.assertEqual(legacy_expense.legacy_source_id, 91001)
 
-        saved = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=middle)
-        self.assertEqual(saved.sales_revenue, Decimal("0.00"))
-        self.assertEqual(saved.product_cost, Decimal("0.00"))
-        self.assertEqual(saved.gross_profit, Decimal("0.00"))
-        self.assertEqual(saved.expense_total, Decimal("35.00"))
-        self.assertEqual(saved.net_profit, Decimal("-35.00"))
+        saved = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=end)
+        self.assertEqual(saved.sales_revenue, Decimal("1100.00"))
+        self.assertEqual(saved.product_cost, Decimal("900.00"))
+        self.assertEqual(saved.gross_profit, Decimal("200.00"))
+        self.assertEqual(saved.expense_total, Decimal("250.00"))
+        self.assertEqual(saved.net_profit, Decimal("-50.00"))
         self.assertEqual(saved.calculated_by, self.fig_manager)
 
         end_sale = DailySale.objects.get(
@@ -1051,8 +1079,8 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertEqual(end_summary.expense_total, Decimal("250.00"))
         self.assertEqual(end_summary.net_profit, Decimal("-50.00"))
 
-        refreshed = self.client.get(url, {"date": middle.isoformat()})
-        self.assertEqual(refreshed.context["net_profit"], Decimal("-35.00"))
+        refreshed = self.client.get(url, {"date": end.isoformat()})
+        self.assertEqual(refreshed.context["net_profit"], Decimal("-50.00"))
         self.assertEqual(refreshed.context["saved_daily_profit"], saved)
 
     def test_saved_daily_profit_includes_sales_and_persists_historical_snapshot(self):
@@ -1122,16 +1150,21 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertTrue(ShopExpense.objects.filter(shop=self.fig_tree, amount=Decimal("75.00")).exists())
         self.assertFalse(ShopExpense.objects.filter(shop=self.empire, amount=Decimal("75.00")).exists())
 
-    def test_expense_range_is_limited_to_one_year(self):
+    def test_profit_sheet_expenses_use_the_selected_trading_date_only(self):
         self.client.force_login(self.fig_manager)
         today = timezone.localdate()
-        start = today - timedelta(days=366)
         response = self.client.get(
             reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
-            {"expense_start": start.isoformat(), "expense_end": today.isoformat()},
+            {
+                "date": today.isoformat(),
+                "expense_start": (today - timedelta(days=10)).isoformat(),
+                "expense_end": today.isoformat(),
+            },
         )
-        self.assertTrue(response.context["expense_range_too_long"])
-        self.assertContains(response, "Choose a date range of one year or less.")
+        self.assertEqual(len(response.context["expense_range_rows"]), 1)
+        self.assertEqual(response.context["expense_range_rows"][0]["date"], today)
+        self.assertNotContains(response, "Expenses from")
+        self.assertNotContains(response, "Load dates")
 
     def test_manual_entry_is_rejected_if_stock_sheet_already_has_product(self):
         stock_sale = DailySale.objects.create(

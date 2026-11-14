@@ -558,7 +558,6 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
     """Record one shop's daily product quantities and expenses."""
 
     template_name = "tracker/shop_profit_sheet.html"
-    MAX_EXPENSE_RANGE_DAYS = 366
 
     def _selected_date(self, raw):
         return _parse_date(raw) or timezone.localdate()
@@ -578,11 +577,8 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
 
     def _build_context(self, day, posted=None):
         posted = posted or {}
-        expense_start, expense_end, expense_dates = self._expense_range(
-            posted.get("expense_start") or self.request.GET.get("expense_start"),
-            posted.get("expense_end") or self.request.GET.get("expense_end"),
-            day,
-        )
+        expense_start = expense_end = day
+        expense_dates = [day]
         cards = ShopProduct.objects.filter(
             shop=self.shop, is_active=True, cost_price__gt=0
         ).select_related("product").order_by("product__name", "product__category")
@@ -713,14 +709,9 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         redirect_url = f"{reverse('shop_profit_sheet', args=[self.shop.pk])}?date={day.isoformat()}"
 
         if action == "calculate_daily_profit":
-            start, end, dates = self._expense_range(
-                request.POST.get("expense_start"),
-                request.POST.get("expense_end"),
-                day,
-            )
+            start = end = day
+            dates = [day]
             errors = []
-            if not dates:
-                errors.append(f"Choose a date range of {self.MAX_EXPENSE_RANGE_DAYS} days or fewer.")
 
             entries = []
             for expense_day in dates:
@@ -834,7 +825,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             else:
                 messages.warning(request, "No valid dates were available to calculate profit.")
             return redirect(
-                f"{redirect_url}&expense_start={start.isoformat()}&expense_end={end.isoformat()}"
+                redirect_url
             )
 
         if action == "add_expense":
@@ -1398,8 +1389,8 @@ class ProductComparisonCSVView(OwnerRequiredMixin, View):
         return response
 
 
-def _product_report_rows():
-    """Return ``(shops, rows)`` for the all-products cross-shop report.
+def _product_report_rows(start_date=None, end_date=None):
+    """Return ``(shops, rows)`` for products-by-shop within an optional date range.
 
     One row per product, sorted by total profit so the best movers are on
     top. Each row carries an all-time profit/units/revenue cell per shop, in
@@ -1408,9 +1399,12 @@ def _product_report_rows():
     have never moved?".
     """
     shops = list(Shop.objects.all().order_by("name"))
+    sales = DailySale.objects.all()
+    if start_date is not None and end_date is not None:
+        sales = sales.filter(sale_date__range=(start_date, end_date))
     aggregated = {
         (row["product_id"], row["shop_id"]): row
-        for row in DailySale.objects.values("product_id", "shop_id").annotate(
+        for row in sales.values("product_id", "shop_id").annotate(
             profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
         )
     }
@@ -1558,7 +1552,7 @@ def _all_shops_profit_date_range(request):
 
 
 class ProductReportView(OwnerRequiredMixin, TemplateView):
-    """All-time report: every product, one profit column per shop.
+    """Date-filtered report: every product, one profit column per shop.
 
     Complements :class:`ProductComparisonView`, which compares up to five
     products the owner picks. This page shows the whole catalogue at once,
@@ -1577,8 +1571,8 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        shops, rows = _product_report_rows()
         start_date, end_date = _all_shops_profit_date_range(self.request)
+        shops, rows = _product_report_rows(start_date, end_date)
         profit_report = _all_shops_profit_report(start_date, end_date)
         context["shops"] = shops
         context["rows"] = rows
@@ -1594,7 +1588,12 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             grand_total += profit
         context["shop_totals"] = shop_totals
         context["grand_total"] = grand_total
-        context["csv_export_url"] = reverse("product_report_csv")
+        context["csv_export_url"] = (
+            f"{reverse('product_report_csv')}?{urlencode({
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+            })}"
+        )
         context["profit_start_date"] = start_date.isoformat()
         context["profit_end_date"] = end_date.isoformat()
         context["profit_report"] = profit_report
@@ -1613,12 +1612,14 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
 
 
 class ProductReportCSVView(OwnerRequiredMixin, View):
-    """Download the all-products cross-shop report as a CSV."""
+    """Download the all-products cross-shop report for a selected date range."""
 
     def get(self, request, *args, **kwargs):
-        shops, rows = _product_report_rows()
+        start_date, end_date = _all_shops_profit_date_range(request)
+        shops, rows = _product_report_rows(start_date, end_date)
         output = StringIO()
         writer = csv.writer(output)
+        writer.writerow(["From", start_date.isoformat(), "To", end_date.isoformat()])
         writer.writerow(
             ["Product", "Category"]
             + [f"{shop.name} profit" for shop in shops]
@@ -1636,7 +1637,9 @@ class ProductReportCSVView(OwnerRequiredMixin, View):
             )
 
         response = HttpResponse(output.getvalue(), content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="product_report.csv"'
+        response["Content-Disposition"] = (
+            f'attachment; filename="product_report_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"'
+        )
         return response
 
 

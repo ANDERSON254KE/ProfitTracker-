@@ -118,30 +118,10 @@
     </div>
 </div>
 
-<form method="get" class="mb-4 flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-    <div>
-        <label for="expenseRangeStart" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Expenses from</label>
-        <input id="expenseRangeStart" name="expense_start" type="date" value="{{ expense_start }}" required
-               class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-    </div>
-    <div>
-        <label for="expenseRangeEnd" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">To</label>
-        <input id="expenseRangeEnd" name="expense_end" type="date" value="{{ expense_end }}" required
-               class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-    </div>
-    <input type="hidden" name="date" value="{{ selected_date }}">
-    <button type="submit" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Load dates</button>
-</form>
-
-{% if expense_range_too_long %}
-<p class="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">Choose a date range of one year or less.</p>
-{% else %}
 <form method="post" id="profit-calculation-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="calculate_daily_profit">
     <input type="hidden" name="date" value="{{ selected_date }}">
-    <input type="hidden" name="expense_start" value="{{ expense_start }}">
-    <input type="hidden" name="expense_end" value="{{ expense_end }}">
 
 <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
@@ -235,8 +215,8 @@
 <section class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
     <div class="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 px-5 py-4">
         <div>
-            <h2 class="text-base font-semibold text-slate-900">Daily expense totals</h2>
-            <p class="mt-1 text-sm text-slate-500">Enter daily expense totals for the selected range. Product quantities and expenses save together.</p>
+            <h2 class="text-base font-semibold text-slate-900">Expenses for {{ selected_date }}</h2>
+            <p class="mt-1 text-sm text-slate-500">Enter the total expenses for this trading date. Product quantities and expenses save together.</p>
         </div>
     </div>
 
@@ -280,5 +260,4 @@
         </div>
 </section>
 </form>
-{% endif %}
 {% endblock %}
