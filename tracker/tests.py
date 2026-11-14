@@ -1006,12 +1006,13 @@ class ShopProfitSheetTests(BaseDataTestCase):
             url,
             {
                 "date": end.isoformat(),
-                "action": "save_expense_totals",
+                "action": "calculate_daily_profit",
                 "expense_start": start.isoformat(),
                 "expense_end": end.isoformat(),
                 f"expense_total_{start.isoformat()}": "100.00",
                 f"expense_total_{middle.isoformat()}": "35.00",
                 f"expense_total_{end.isoformat()}": "250.00",
+                f"units_{self.gilbeys.pk}": "2",
             },
         )
         self.assertRedirects(
@@ -1038,6 +1039,18 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertEqual(saved.net_profit, Decimal("-35.00"))
         self.assertEqual(saved.calculated_by, self.fig_manager)
 
+        end_sale = DailySale.objects.get(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            sale_date=end,
+            is_profit_sheet_entry=True,
+        )
+        self.assertEqual(end_sale.units_sold, Decimal("2"))
+        end_summary = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=end)
+        self.assertEqual(end_summary.sales_revenue, Decimal("1100.00"))
+        self.assertEqual(end_summary.expense_total, Decimal("250.00"))
+        self.assertEqual(end_summary.net_profit, Decimal("-50.00"))
+
         refreshed = self.client.get(url, {"date": middle.isoformat()})
         self.assertEqual(refreshed.context["net_profit"], Decimal("-35.00"))
         self.assertEqual(refreshed.context["saved_daily_profit"], saved)
@@ -1060,7 +1073,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             url,
             {
                 "date": day.isoformat(),
-                "action": "save_expense_totals",
+                "action": "calculate_daily_profit",
                 "expense_start": day.isoformat(),
                 "expense_end": day.isoformat(),
                 f"expense_total_{day.isoformat()}": "50.00",
@@ -1100,7 +1113,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             reverse("shop_profit_sheet", args=[self.empire.pk]),
             {
                 "date": day.isoformat(),
-                "action": "save_expense_totals",
+                "action": "calculate_daily_profit",
                 "expense_start": day.isoformat(),
                 "expense_end": day.isoformat(),
                 f"expense_total_{day.isoformat()}": "75.00",
@@ -1159,6 +1172,10 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertContains(response, "sheet-responsive-table")
         self.assertContains(response, "grid-template-columns: repeat(2, minmax(0, 1fr))")
         self.assertContains(response, "border border-slate-400")
+        self.assertContains(response, 'value="calculate_daily_profit"')
+        self.assertContains(response, "Calculate profits")
+        self.assertNotContains(response, "Save quantities")
+        self.assertNotContains(response, "Products awaiting shop pricing")
 
     def test_profit_sheet_has_global_and_per_category_search(self):
         self.client.force_login(self.fig_manager)

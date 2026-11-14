@@ -712,7 +712,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         action = request.POST.get("action")
         redirect_url = f"{reverse('shop_profit_sheet', args=[self.shop.pk])}?date={day.isoformat()}"
 
-        if action == "save_expense_totals":
+        if action == "calculate_daily_profit":
             start, end, dates = self._expense_range(
                 request.POST.get("expense_start"),
                 request.POST.get("expense_end"),
@@ -743,12 +743,67 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                     continue
                 entries.append((expense_day, amount))
 
+            cards = list(ShopProduct.objects.filter(
+                shop=self.shop, is_active=True, cost_price__gt=0
+            ).select_related("product"))
+            existing_sales = {
+                sale.product_id: sale
+                for sale in DailySale.objects.filter(
+                    shop=self.shop, sale_date=day, is_profit_sheet_entry=True
+                )
+            }
+            stock_products = set(
+                DailySale.objects.filter(
+                    shop=self.shop, sale_date=day, total_stock__isnull=False
+                ).values_list("product_id", flat=True)
+            )
+            sales_updates = []
+            for card in cards:
+                raw_units = request.POST.get(f"units_{card.product_id}")
+                if raw_units is None or not raw_units.strip():
+                    continue
+                try:
+                    units = Decimal(raw_units.strip())
+                except (InvalidOperation, TypeError, ValueError):
+                    units = None
+                if (
+                    units is None
+                    or not units.is_finite()
+                    or units < 0
+                    or units > Decimal("9999999999.99")
+                    or units.as_tuple().exponent < -2
+                ):
+                    errors.append(f"Enter a valid non-negative quantity for {card.product}.")
+                    continue
+                if card.product_id in stock_products:
+                    errors.append(f"{card.product} already has a stock-sheet entry for this date.")
+                    continue
+                previous = existing_sales.get(card.product_id)
+                if previous is not None or units > 0:
+                    sales_updates.append((card, previous, units))
+
             if errors:
                 context = self._build_context(day, request.POST)
                 context["errors"] = errors
                 return self.render_to_response(context, status=400)
 
             with transaction.atomic():
+                for card, sale, units in sales_updates:
+                    if sale is None:
+                        sale = DailySale(
+                            shop=self.shop,
+                            product=card.product,
+                            sale_date=day,
+                            units_sold=units,
+                            unit_cost_at_sale=card.cost_price,
+                            unit_price_at_sale=card.selling_price,
+                            is_profit_sheet_entry=True,
+                            recorded_by=request.user,
+                        )
+                    else:
+                        sale.units_sold = units
+                    sale.save()
+
                 for expense_day, amount in entries:
                     existing = list(
                         ShopExpense.objects.select_for_update()
@@ -770,11 +825,14 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                             amount=amount,
                             recorded_by=request.user,
                         )
+                dates_to_calculate = set(dates)
+                dates_to_calculate.add(day)
+                for expense_day in dates_to_calculate:
                     self._save_daily_profit(expense_day, request.user)
-            if entries:
-                messages.success(request, f"Calculated net profit for {len(entries)} date(s).")
+            if dates:
+                messages.success(request, f"Saved sales and calculated profit for {len(dates_to_calculate)} date(s).")
             else:
-                messages.warning(request, "Enter an expense total for at least one date to calculate net profit.")
+                messages.warning(request, "No valid dates were available to calculate profit.")
             return redirect(
                 f"{redirect_url}&expense_start={start.isoformat()}&expense_end={end.isoformat()}"
             )
