@@ -40,7 +40,15 @@ from .mixins import (
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
 )
-from .models import CustomUser, DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
+from .models import (
+    CustomUser,
+    DailySale,
+    MasterProduct,
+    Shop,
+    ShopDailyProfit,
+    ShopExpense,
+    ShopProduct,
+)
 from .price_list import price_list_order, price_list_rank
 
 #: Number of days shown in the owner's "recent days" table.
@@ -66,6 +74,34 @@ def _money(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _save_shop_daily_profit(shop, day, user, create=True):
+    existing = ShopDailyProfit.objects.filter(shop=shop, profit_date=day).first()
+    if existing is None and not create:
+        return None
+
+    sales = DailySale.objects.filter(shop=shop, sale_date=day).aggregate(
+        revenue=Sum("total_revenue"), cost=Sum("total_cost"), profit=Sum("profit")
+    )
+    expenses = ShopExpense.objects.filter(shop=shop, expense_date=day).aggregate(
+        amount=Sum("amount")
+    )
+    gross_profit = _money(sales["profit"])
+    expense_total = _money(expenses["amount"])
+    record, _ = ShopDailyProfit.objects.update_or_create(
+        shop=shop,
+        profit_date=day,
+        defaults={
+            "sales_revenue": _money(sales["revenue"]),
+            "product_cost": _money(sales["cost"]),
+            "gross_profit": gross_profit,
+            "expense_total": expense_total,
+            "net_profit": gross_profit - expense_total,
+            "calculated_by": user,
+        },
+    )
+    return record
 
 
 def _parse_date(value):
@@ -349,6 +385,7 @@ class DailySaleCreateView(LoginRequiredMixin, ManagerShopAccessMixin, CreateView
         form.instance.recorded_by = self.request.user
         response = super().form_valid(form)
         sale = self.object
+        _save_shop_daily_profit(self.shop, sale.sale_date, self.request.user, create=False)
         messages.success(
             self.request,
             f"Recorded {sale.units_sold} x {sale.product} at {self.shop.name}. "
@@ -492,6 +529,8 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             return self.render_to_response(context, status=400)
 
         sales = form.save(request.user)
+        if sales:
+            _save_shop_daily_profit(self.shop, timezone.localdate(), request.user, create=False)
         for warning in form.warnings:
             messages.warning(request, warning)
 
@@ -519,12 +558,31 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
     """Record one shop's daily product quantities and expenses."""
 
     template_name = "tracker/shop_profit_sheet.html"
+    MAX_EXPENSE_RANGE_DAYS = 366
 
     def _selected_date(self, raw):
         return _parse_date(raw) or timezone.localdate()
 
+    def _save_daily_profit(self, day, user, create=True):
+        return _save_shop_daily_profit(self.shop, day, user, create=create)
+
+    def _expense_range(self, start_raw, end_raw, fallback_day):
+        start = _parse_date(start_raw) or fallback_day
+        end = _parse_date(end_raw) or fallback_day
+        if start > end:
+            start, end = end, start
+        if (end - start).days + 1 > self.MAX_EXPENSE_RANGE_DAYS:
+            return start, end, []
+        days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+        return start, end, days
+
     def _build_context(self, day, posted=None):
         posted = posted or {}
+        expense_start, expense_end, expense_dates = self._expense_range(
+            posted.get("expense_start") or self.request.GET.get("expense_start"),
+            posted.get("expense_end") or self.request.GET.get("expense_end"),
+            day,
+        )
         cards = ShopProduct.objects.filter(
             shop=self.shop, is_active=True, cost_price__gt=0
         ).select_related("product").order_by("product__name", "product__category")
@@ -578,7 +636,35 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         )
         expenses = list(ShopExpense.objects.filter(shop=self.shop, expense_date=day))
         expense_total = sum((expense.amount for expense in expenses), Decimal("0.00"))
+        range_totals = {
+            row["expense_date"]: _money(row["amount"])
+            for row in ShopExpense.objects.filter(
+                shop=self.shop, expense_date__range=(expense_start, expense_end)
+            ).values("expense_date").annotate(amount=Sum("amount"))
+        }
+        range_gross_profits = {
+            row["sale_date"]: _money(row["profit"])
+            for row in DailySale.objects.filter(
+                shop=self.shop, sale_date__range=(expense_start, expense_end)
+            ).values("sale_date").annotate(profit=Sum("profit"))
+        }
+        saved_records = {
+            record.profit_date: record
+            for record in ShopDailyProfit.objects.filter(
+                shop=self.shop, profit_date__range=(expense_start, expense_end)
+            )
+        }
+        expense_range_rows = [
+            self._expense_range_row(
+                range_day, range_totals, range_gross_profits, saved_records, posted
+            )
+            for range_day in expense_dates
+        ]
+        saved_day = ShopDailyProfit.objects.filter(shop=self.shop, profit_date=day).first()
         gross_profit = _money(sales_totals["profit"])
+        if saved_day is not None:
+            gross_profit = saved_day.gross_profit
+            expense_total = saved_day.expense_total
         return {
             "shop": self.shop,
             "selected_date": day.isoformat(),
@@ -586,15 +672,35 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             "category_groups": category_groups,
             "unpriced_products": list(unpriced_products),
             "expenses": expenses,
+            "expense_start": expense_start.isoformat(),
+            "expense_end": expense_end.isoformat(),
+            "expense_range_rows": expense_range_rows,
+            "expense_range_too_long": not expense_dates,
+            "saved_daily_profit": saved_day,
             "expense_description": posted.get("description", ""),
             "expense_amount": posted.get("amount", ""),
-            "day_revenue": _money(sales_totals["revenue"]),
-            "day_cost": _money(sales_totals["cost"]),
+            "day_revenue": saved_day.sales_revenue if saved_day else _money(sales_totals["revenue"]),
+            "day_cost": saved_day.product_cost if saved_day else _money(sales_totals["cost"]),
             "day_units": _money(sales_totals["units"]),
             "gross_profit": gross_profit,
             "expense_total": expense_total,
-            "net_profit": gross_profit - expense_total,
+            "net_profit": saved_day.net_profit if saved_day else gross_profit - expense_total,
             "has_products": bool(rows),
+        }
+
+    @staticmethod
+    def _expense_range_row(day, range_totals, range_gross_profits, saved_records, posted):
+        saved = saved_records.get(day)
+        gross = saved.gross_profit if saved else range_gross_profits.get(day, Decimal("0.00"))
+        expense_total = saved.expense_total if saved else range_totals.get(day, Decimal("0.00"))
+        return {
+            "date": day,
+            "existing_total": expense_total,
+            "amount": posted.get(f"expense_total_{day.isoformat()}", _input_value(expense_total)),
+            "gross_profit": gross,
+            "net_profit": saved.net_profit if saved else gross - expense_total,
+            "calculated": saved is not None,
+            "calculated_at": saved.calculated_at if saved else None,
         }
 
     def get(self, request, *args, **kwargs):
@@ -605,6 +711,73 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         day = self._selected_date(request.POST.get("date"))
         action = request.POST.get("action")
         redirect_url = f"{reverse('shop_profit_sheet', args=[self.shop.pk])}?date={day.isoformat()}"
+
+        if action == "save_expense_totals":
+            start, end, dates = self._expense_range(
+                request.POST.get("expense_start"),
+                request.POST.get("expense_end"),
+                day,
+            )
+            errors = []
+            if not dates:
+                errors.append(f"Choose a date range of {self.MAX_EXPENSE_RANGE_DAYS} days or fewer.")
+
+            entries = []
+            for expense_day in dates:
+                day_key = expense_day.isoformat()
+                raw_amount = request.POST.get(f"expense_total_{day_key}", "").strip()
+                if not raw_amount:
+                    continue
+                try:
+                    amount = Decimal(raw_amount)
+                except (InvalidOperation, TypeError, ValueError):
+                    amount = None
+                if (
+                    amount is None
+                    or not amount.is_finite()
+                    or amount < 0
+                    or amount > Decimal("999999999999.99")
+                    or amount.as_tuple().exponent < -2
+                ):
+                    errors.append(f"Enter a valid non-negative expense total for {day_key}.")
+                    continue
+                entries.append((expense_day, amount))
+
+            if errors:
+                context = self._build_context(day, request.POST)
+                context["errors"] = errors
+                return self.render_to_response(context, status=400)
+
+            with transaction.atomic():
+                for expense_day, amount in entries:
+                    existing = list(
+                        ShopExpense.objects.select_for_update()
+                        .filter(shop=self.shop, expense_date=expense_day)
+                        .order_by("pk")
+                    )
+                    if existing:
+                        existing[0].amount = amount
+                        existing[0].description = "Daily expenses"
+                        existing[0].save(update_fields=["amount", "description"])
+                        for extra in existing[1:]:
+                            extra.amount = Decimal("0.00")
+                            extra.save(update_fields=["amount"])
+                    elif amount > 0:
+                        ShopExpense.objects.create(
+                            shop=self.shop,
+                            expense_date=expense_day,
+                            description="Daily expenses",
+                            amount=amount,
+                            recorded_by=request.user,
+                        )
+                    self._save_daily_profit(expense_day, request.user)
+            if entries:
+                messages.success(request, f"Calculated net profit for {len(entries)} date(s).")
+            else:
+                messages.warning(request, "Enter an expense total for at least one date to calculate net profit.")
+            return redirect(
+                f"{redirect_url}&expense_start={start.isoformat()}&expense_end={end.isoformat()}"
+            )
 
         if action == "add_expense":
             description = request.POST.get("description", "").strip()
@@ -634,6 +807,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 amount=amount,
                 recorded_by=request.user,
             )
+            self._save_daily_profit(day, request.user)
             messages.success(request, "Expense added to this shop's profit sheet.")
             return redirect(redirect_url)
 
@@ -646,6 +820,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 ShopExpense.objects.filter(
                     pk=expense_id, shop=self.shop, expense_date=day
                 ).delete()
+                self._save_daily_profit(day, request.user)
             messages.success(request, "Expense removed from this shop's profit sheet.")
             return redirect(redirect_url)
 
@@ -714,6 +889,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 else:
                     sale.units_sold = units
                 sale.save()
+            self._save_daily_profit(day, request.user, create=False)
 
         messages.success(request, "Product quantities saved. Profit totals include this shop's recorded expenses.")
         return redirect(redirect_url)

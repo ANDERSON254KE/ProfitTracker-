@@ -16,11 +16,12 @@ import openpyxl
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db.models import Sum
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
+from tracker.models import DailySale, MasterProduct, Shop, ShopDailyProfit, ShopExpense, ShopProduct
 from tracker.templatetags.money import ksh, signed_ksh, units
 
 CustomUser = get_user_model()
@@ -973,6 +974,152 @@ class ShopProfitSheetTests(BaseDataTestCase):
                                      is_profit_sheet_entry=True).exists()
         )
 
+    def test_daily_expense_totals_replace_existing_amount_and_calculate_net_profit(self):
+        start = timezone.localdate() - timedelta(days=2)
+        middle = start + timedelta(days=1)
+        end = start + timedelta(days=2)
+        ShopExpense.objects.create(
+            shop=self.fig_tree,
+            expense_date=middle,
+            description="Previously recorded",
+            amount=Decimal("20.00"),
+            recorded_by=self.fig_manager,
+        )
+        legacy_expense = ShopExpense.objects.create(
+            shop=self.fig_tree,
+            expense_date=middle,
+            description="Legacy expense",
+            amount=Decimal("5.00"),
+            recorded_by=self.fig_manager,
+            legacy_source_id=91001,
+        )
+        self.client.force_login(self.fig_manager)
+        url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        response = self.client.get(
+            url,
+            {"date": end.isoformat(), "expense_start": start.isoformat(), "expense_end": end.isoformat()},
+        )
+        self.assertEqual(len(response.context["expense_range_rows"]), 3)
+        self.assertEqual(response.context["expense_range_rows"][1]["existing_total"], Decimal("25.00"))
+
+        response = self.client.post(
+            url,
+            {
+                "date": end.isoformat(),
+                "action": "save_expense_totals",
+                "expense_start": start.isoformat(),
+                "expense_end": end.isoformat(),
+                f"expense_total_{start.isoformat()}": "100.00",
+                f"expense_total_{middle.isoformat()}": "35.00",
+                f"expense_total_{end.isoformat()}": "250.00",
+            },
+        )
+        self.assertRedirects(
+            response,
+            f"{url}?date={end.isoformat()}&expense_start={start.isoformat()}&expense_end={end.isoformat()}",
+        )
+        totals = dict(
+            ShopExpense.objects.filter(shop=self.fig_tree, expense_date__range=(start, end))
+            .values_list("expense_date")
+            .annotate(total=Sum("amount"))
+        )
+        self.assertEqual(totals[start], Decimal("100.00"))
+        self.assertEqual(totals[middle], Decimal("35.00"))
+        self.assertEqual(totals[end], Decimal("250.00"))
+        self.assertEqual(ShopExpense.objects.filter(shop=self.fig_tree, expense_date=middle).count(), 2)
+        legacy_expense.refresh_from_db()
+        self.assertEqual(legacy_expense.legacy_source_id, 91001)
+
+        saved = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=middle)
+        self.assertEqual(saved.sales_revenue, Decimal("0.00"))
+        self.assertEqual(saved.product_cost, Decimal("0.00"))
+        self.assertEqual(saved.gross_profit, Decimal("0.00"))
+        self.assertEqual(saved.expense_total, Decimal("35.00"))
+        self.assertEqual(saved.net_profit, Decimal("-35.00"))
+        self.assertEqual(saved.calculated_by, self.fig_manager)
+
+        refreshed = self.client.get(url, {"date": middle.isoformat()})
+        self.assertEqual(refreshed.context["net_profit"], Decimal("-35.00"))
+        self.assertEqual(refreshed.context["saved_daily_profit"], saved)
+
+    def test_saved_daily_profit_includes_sales_and_persists_historical_snapshot(self):
+        day = timezone.localdate() - timedelta(days=4)
+        DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            sale_date=day,
+            units_sold=Decimal("2"),
+            unit_cost_at_sale=Decimal("450.00"),
+            unit_price_at_sale=Decimal("550.00"),
+            is_profit_sheet_entry=True,
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+        url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        response = self.client.post(
+            url,
+            {
+                "date": day.isoformat(),
+                "action": "save_expense_totals",
+                "expense_start": day.isoformat(),
+                "expense_end": day.isoformat(),
+                f"expense_total_{day.isoformat()}": "50.00",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        record = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=day)
+        self.assertEqual(record.sales_revenue, Decimal("1100.00"))
+        self.assertEqual(record.product_cost, Decimal("900.00"))
+        self.assertEqual(record.gross_profit, Decimal("200.00"))
+        self.assertEqual(record.expense_total, Decimal("50.00"))
+        self.assertEqual(record.net_profit, Decimal("150.00"))
+
+        history = self.client.get(url, {"date": day.isoformat()})
+        self.assertEqual(history.context["saved_daily_profit"], record)
+        self.assertEqual(history.context["net_profit"], Decimal("150.00"))
+        self.assertContains(history, "Saved for")
+
+        self.client.post(
+            url,
+            {
+                "date": day.isoformat(),
+                "action": "save_sales",
+                f"units_{self.gilbeys.pk}": "3",
+            },
+        )
+        record.refresh_from_db()
+        self.assertEqual(record.sales_revenue, Decimal("1650.00"))
+        self.assertEqual(record.product_cost, Decimal("1350.00"))
+        self.assertEqual(record.gross_profit, Decimal("300.00"))
+        self.assertEqual(record.net_profit, Decimal("250.00"))
+
+    def test_expense_range_batch_cannot_write_to_another_shop(self):
+        self.client.force_login(self.fig_manager)
+        day = timezone.localdate()
+        self.client.post(
+            reverse("shop_profit_sheet", args=[self.empire.pk]),
+            {
+                "date": day.isoformat(),
+                "action": "save_expense_totals",
+                "expense_start": day.isoformat(),
+                "expense_end": day.isoformat(),
+                f"expense_total_{day.isoformat()}": "75.00",
+            },
+        )
+        self.assertTrue(ShopExpense.objects.filter(shop=self.fig_tree, amount=Decimal("75.00")).exists())
+        self.assertFalse(ShopExpense.objects.filter(shop=self.empire, amount=Decimal("75.00")).exists())
+
+    def test_expense_range_is_limited_to_one_year(self):
+        self.client.force_login(self.fig_manager)
+        today = timezone.localdate()
+        start = today - timedelta(days=366)
+        response = self.client.get(
+            reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
+            {"expense_start": start.isoformat(), "expense_end": today.isoformat()},
+        )
+        self.assertTrue(response.context["expense_range_too_long"])
+        self.assertContains(response, "Choose a date range of one year or less.")
+
     def test_manual_entry_is_rejected_if_stock_sheet_already_has_product(self):
         stock_sale = DailySale.objects.create(
             shop=self.fig_tree,
@@ -1007,6 +1154,11 @@ class ShopProfitSheetTests(BaseDataTestCase):
             {"250ml"},
         )
         self.assertContains(response, ">250ml</h3>")
+        self.assertNotContains(response, "Profit / unit")
+        self.assertNotContains(response, "Recorded By")
+        self.assertContains(response, "sheet-responsive-table")
+        self.assertContains(response, "grid-template-columns: repeat(2, minmax(0, 1fr))")
+        self.assertContains(response, "border border-slate-400")
 
 
 class PriceListCatalogueSyncTests(BaseDataTestCase):

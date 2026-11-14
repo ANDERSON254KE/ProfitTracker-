@@ -392,3 +392,36 @@ class ShopExpense(models.Model):
 
     def __str__(self) -> str:
         return f"{self.description}: {self.amount} at {self.shop} on {self.expense_date}"
+
+
+class ShopDailyProfit(models.Model):
+    """Saved daily sales, expense and net-profit calculation for one shop."""
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="daily_profit_records")
+    profit_date = LocalDateField("Profit Date", default=timezone.localdate, db_index=True)
+    sales_revenue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    product_cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    gross_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    expense_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    net_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    calculated_by = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="daily_profit_calculations"
+    )
+    calculated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-profit_date", "shop__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shop", "profit_date"],
+                name="unique_shop_daily_profit_date",
+            )
+        ]
+        indexes = [models.Index(fields=["shop", "-profit_date"], name="shop_daily_profit_date_idx")]
+
+    def save(self, *args, **kwargs):
+        self.net_profit = (self.gross_profit - self.expense_total).quantize(Decimal("0.01"))
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.shop} profit on {self.profit_date}: {self.net_profit}"

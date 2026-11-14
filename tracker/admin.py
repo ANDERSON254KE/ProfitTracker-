@@ -7,7 +7,15 @@ single source of truth for profit stays :meth:`tracker.models.DailySale.save`.
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import CustomUser, DailySale, MasterProduct, Shop, ShopExpense, ShopProduct
+from .models import (
+    CustomUser,
+    DailySale,
+    MasterProduct,
+    Shop,
+    ShopDailyProfit,
+    ShopExpense,
+    ShopProduct,
+)
 
 
 @admin.register(CustomUser)
@@ -92,3 +100,19 @@ class ShopExpenseAdmin(admin.ModelAdmin):
     search_fields = ("description", "recorded_by__username")
     date_hierarchy = "expense_date"
     readonly_fields = ("created_at",)
+
+
+@admin.register(ShopDailyProfit)
+class ShopDailyProfitAdmin(admin.ModelAdmin):
+    """Saved daily gross/net profit snapshots, scoped and searchable by shop/date."""
+
+    list_display = (
+        "profit_date", "shop", "sales_revenue", "product_cost",
+        "gross_profit", "expense_total", "net_profit", "calculated_by", "calculated_at",
+    )
+    list_filter = ("shop", "profit_date")
+    date_hierarchy = "profit_date"
+    readonly_fields = (
+        "sales_revenue", "product_cost", "gross_profit", "expense_total",
+        "net_profit", "calculated_by", "calculated_at",
+    )
