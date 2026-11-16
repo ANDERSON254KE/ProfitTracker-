@@ -425,3 +425,52 @@ class ShopDailyProfit(models.Model):
 
     def __str__(self) -> str:
         return f"{self.shop} profit on {self.profit_date}: {self.net_profit}"
+
+
+class StockAddition(models.Model):
+    """Stock the owner records by hand instead of on a daily stock sheet.
+
+    The stock sheet can only say how much stock a shop had in total on a day.
+    When the owner knows a delivery arrived but nobody filled the sheet, they
+    enter it here. The stock-batch report treats it exactly like a sheet
+    addition: units sold and profit are read from :class:`DailySale` rows
+    dated on or after :attr:`added_on`, using the prices locked in there.
+    """
+
+    shop = models.ForeignKey(
+        Shop, on_delete=models.CASCADE, related_name="stock_additions"
+    )
+    product = models.ForeignKey(
+        MasterProduct, on_delete=models.PROTECT, related_name="stock_additions"
+    )
+    added_on = LocalDateField("Added On", default=timezone.localdate, db_index=True)
+    quantity = models.DecimalField(
+        "Units Added",
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    recorded_by = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="recorded_stock_additions"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-added_on", "-created_at"]
+        indexes = [
+            models.Index(fields=["shop", "-added_on"], name="stock_addition_shop_date_idx")
+        ]
+
+    def clean(self) -> None:
+        """Reject a product the chosen shop does not stock."""
+        if not self.shop_id or not self.product_id:
+            return
+        if not ShopProduct.objects.filter(
+            shop_id=self.shop_id, product_id=self.product_id
+        ).exists():
+            raise ValidationError(
+                {"product": "This product is not stocked by the selected shop."}
+            )
+
+    def __str__(self) -> str:
+        return f"{self.quantity} x {self.product} at {self.shop} on {self.added_on}"

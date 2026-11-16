@@ -102,7 +102,7 @@
 <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
     <div class="border-b border-slate-200 px-5 py-4">
         <h2 class="text-base font-semibold text-slate-900">Stock added → profit to date</h2>
-        <p class="mt-1 text-sm text-slate-500">For every stock addition in the range, how much of that product the shop has sold since the day it was added up to {{ stock_today }}, and the profit those sales made.</p>
+        <p class="mt-1 text-sm text-slate-500">For every stock addition in the range, how much of that product the shop has sold since the day it was added up to {{ stock_today }}, and the profit those sales made. Open "Sold since" to see each day's sales.</p>
     </div>
     <form method="get" action="{% url 'product_report' %}" class="flex flex-wrap items-end gap-3 border-b border-slate-200 px-5 py-4">
         <input type="hidden" name="start_date" value="{{ profit_start_date }}">
@@ -130,6 +130,37 @@
         <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Apply</button>
         <p class="text-xs text-slate-500">Default: this month's additions to today.</p>
     </form>
+    <form method="post" action="{% url 'product_report' %}{% if request.GET %}?{{ request.GET.urlencode }}{% endif %}"
+          class="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-slate-50/70 px-5 py-4">
+        {% csrf_token %}
+        <input type="hidden" name="stock_start_date" value="{{ stock_start_date }}">
+        <input type="hidden" name="stock_end_date" value="{{ stock_end_date }}">
+        <input type="hidden" name="stock_shop" value="{{ stock_shop_filter }}">
+        <p class="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Add stock that was never entered on a daily sheet</p>
+        <div>
+            <label for="{{ stock_form.shop.id_for_label }}" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shop</label>
+            {{ stock_form.shop }}
+        </div>
+        <div>
+            <label for="{{ stock_form.product.id_for_label }}" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Product</label>
+            {{ stock_form.product }}
+        </div>
+        <div>
+            <label for="{{ stock_form.added_on.id_for_label }}" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Arrived on</label>
+            {{ stock_form.added_on }}
+        </div>
+        <div>
+            <label for="{{ stock_form.quantity.id_for_label }}" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Units</label>
+            {{ stock_form.quantity }}
+        </div>
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Add stock</button>
+        <p class="w-full text-xs text-slate-500">Only stock the shop's price list carries can be added. Sales are matched from the "arrived on" date onwards.</p>
+    </form>
+    {% if stock_form.errors %}
+    <div class="border-b border-rose-200 bg-rose-50 px-5 py-3 text-sm text-rose-700">
+        {% for field, errors in stock_form.errors.items %}{% for error in errors %}<p>{{ error }}</p>{% endfor %}{% endfor %}
+    </div>
+    {% endif %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
@@ -150,9 +181,36 @@
                 <tr class="hover:bg-slate-50">
                     <td class="whitespace-nowrap px-5 py-3 text-slate-700">{{ row.date|date:"Y-m-d" }}<span class="block text-xs text-slate-400">{{ row.days }} day{{ row.days|pluralize }}</span></td>
                     <td class="px-5 py-3 text-slate-700">{{ row.shop.name }}</td>
-                    <td class="px-5 py-3 font-medium text-slate-900">{{ row.product.name }}{% if row.product.category %}<span class="block text-xs font-normal text-slate-500">{{ row.product.category }}</span>{% endif %}</td>
+                    <td class="px-5 py-3 font-medium text-slate-900">{{ row.product.name }}{% if row.product.category %}<span class="block text-xs font-normal text-slate-500">{{ row.product.category }}</span>{% endif %}
+                        {% if row.source == "manual" %}
+                        <form method="post" action="{% url 'product_report' %}{% if request.GET %}?{{ request.GET.urlencode }}{% endif %}" class="mt-1 flex items-center gap-2">
+                            {% csrf_token %}
+                            <input type="hidden" name="delete_stock_addition" value="{{ row.pk }}">
+                            <input type="hidden" name="stock_start_date" value="{{ stock_start_date }}">
+                            <input type="hidden" name="stock_end_date" value="{{ stock_end_date }}">
+                            <input type="hidden" name="stock_shop" value="{{ stock_shop_filter }}">
+                            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">Manual</span>
+                            <button type="submit" class="text-[11px] font-medium text-rose-600 hover:text-rose-500">Remove</button>
+                        </form>
+                        {% endif %}
+                    </td>
                     <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ row.added|units }}</td>
-                    <td class="px-5 py-3 text-right text-slate-900">{{ row.sold|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-900">
+                        {% if row.daily %}
+                        <details class="group">
+                            <summary class="cursor-pointer list-none font-medium text-indigo-600 hover:text-indigo-500">{{ row.sold|units }}<span class="block text-[10px] font-normal text-slate-400">per day</span></summary>
+                            <div class="mt-2 space-y-1 rounded-lg bg-slate-50 p-2 text-left text-xs">
+                                {% for day in row.daily %}
+                                <div class="flex items-center justify-between gap-3 whitespace-nowrap">
+                                    <span class="text-slate-500">{{ day.date|date:"M j" }}</span>
+                                    <span class="font-medium text-slate-800">{{ day.units|units }} u</span>
+                                    <span class="{% if day.profit < 0 %}text-rose-600{% elif day.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ day.profit|ksh }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        {% else %}{{ row.sold|units }}{% endif %}
+                    </td>
                     <td class="px-5 py-3 text-right text-slate-900">{{ row.remaining|units }}</td>
                     <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
                     <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% elif row.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ row.profit|ksh }}</td>
@@ -167,7 +225,7 @@
         </table>
     </div>
     <p class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">
-        "Sold since" and "Profit since" count every sale of that product in that shop from the addition date to today, including stock that was already on the shelf. Rows for the same product and shop therefore overlap and must not be added together.
+        "Sold since" and "Profit since" count every sale of that product in that shop from the addition date to today, including stock that was already on the shelf. Rows for the same product and shop therefore overlap and must not be added together. Rows added by hand are marked "Manual" and can be removed.
     </p>
 </section>
 

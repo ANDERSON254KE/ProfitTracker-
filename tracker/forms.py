@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from .models import DailySale, MasterProduct, ShopProduct
+from .models import DailySale, MasterProduct, Shop, ShopProduct, StockAddition
 
 #: Upper bound on products in one sheet submission, so a crafted POST cannot ask
 #: the server to write an unbounded number of rows.
@@ -346,3 +346,61 @@ class ShopPricingForm(forms.Form):
             return Decimal(str(raw).strip())
         except (InvalidOperation, TypeError, ValueError):
             return None
+
+
+class StockAdditionForm(forms.ModelForm):
+    """Record stock that arrived but never went through a daily stock sheet.
+
+    The shop and product are both chosen freely here because the owner is
+    correcting history for any branch; :meth:`StockAddition.clean` rejects a
+    product the chosen shop does not stock.
+    """
+
+    class Meta:
+        model = StockAddition
+        fields = ["shop", "product", "added_on", "quantity"]
+        widgets = {
+            "shop": forms.Select(
+                attrs={
+                    "class": (
+                        "rounded-lg border border-slate-300 bg-white px-3 py-2.5 "
+                        "text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    )
+                }
+            ),
+            "product": forms.Select(
+                attrs={
+                    "class": (
+                        "min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2.5 "
+                        "text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    )
+                }
+            ),
+            "added_on": forms.DateInput(
+                attrs={
+                    "type": "date",
+                    "class": (
+                        "rounded-lg border border-slate-300 bg-white px-3 py-2.5 "
+                        "text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    ),
+                }
+            ),
+            "quantity": forms.NumberInput(
+                attrs={
+                    "step": "1",
+                    "min": "0.01",
+                    "class": (
+                        "w-28 rounded-lg border border-slate-300 bg-white px-3 py-2.5 "
+                        "text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    ),
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["shop"].queryset = Shop.objects.all()
+        self.fields["product"].queryset = MasterProduct.objects.all()
+        self.fields["product"].label_from_instance = lambda product: (
+            f"{product.name} ({product.category})" if product.category else product.name
+        )

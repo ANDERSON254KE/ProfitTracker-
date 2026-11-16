@@ -33,7 +33,12 @@ from django.views.generic import CreateView, DetailView, RedirectView, TemplateV
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from .forms import DailySaleForm, DailySalesSheetForm, ShopPricingForm
+from .forms import (
+    DailySaleForm,
+    DailySalesSheetForm,
+    ShopPricingForm,
+    StockAdditionForm,
+)
 from .mixins import (
     LoginRequiredMixin,
     ManagerRequiredMixin,
@@ -48,6 +53,7 @@ from .models import (
     ShopDailyProfit,
     ShopExpense,
     ShopProduct,
+    StockAddition,
 )
 from .price_list import price_list_order, price_list_rank
 
@@ -1459,17 +1465,18 @@ def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_
 def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
     """Profit made since each stock addition, per product and shop.
 
-    A "batch" is one day's ``additional_stock`` on a shop's daily sheet. For
+    A "batch" is either one day's ``additional_stock`` on a shop's daily sheet
+    or a :class:`~tracker.models.StockAddition` the owner entered by hand. For
     every batch the row reports how much stock was added, how many units of
-    that product the shop has sold from that day up to today, what is left,
-    and the profit those sales produced.
+    that product the shop has sold from that day up to today, day by day, what
+    is left, and the profit those sales produced.
 
     Units and profit are taken from the ``DailySale`` rows dated on or after
     the addition, so a batch spanning several days is measured against the
     same locked-in prices the reports use. Sales made from stock that was
-    already on the shelf count towards the batch too -- the sheet does not
-    record which physical units left the shelf -- so rows for the same shop
-    and product overlap; totals across rows are therefore not additive.
+    already on the shelf count towards the batch too -- the records do not say
+    which physical units left the shelf -- so rows for the same shop and
+    product overlap; totals across rows are therefore not additive.
 
     Args:
         start_date: first stock-addition date to include.
@@ -1477,26 +1484,63 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
         shop_ids: optional set of shop pks to restrict the report to.
 
     Returns:
-        A list of row dicts, newest addition first.
+        A list of row dicts, newest addition first. Each row's ``daily`` entry
+        lists the units and profit sold on each day from the addition to today.
     """
     today = timezone.localdate()
-    additions = (
+    sheet_additions = (
         DailySale.objects.filter(
             sale_date__range=(start_date, end_date), additional_stock__gt=0
         )
         .select_related("shop", "product")
-        .order_by("-sale_date", "shop__name", "product__name", "product__category", "pk")
     )
     if shop_ids:
-        additions = additions.filter(shop_id__in=list(shop_ids))
-    additions = list(additions)
+        sheet_additions = sheet_additions.filter(shop_id__in=list(shop_ids))
+    manual_additions = StockAddition.objects.filter(
+        added_on__range=(start_date, end_date)
+    ).select_related("shop", "product")
+    if shop_ids:
+        manual_additions = manual_additions.filter(shop_id__in=list(shop_ids))
+
+    additions = [
+        {
+            "date": sale.sale_date,
+            "shop": sale.shop,
+            "product": sale.product,
+            "added": _money(sale.additional_stock),
+            "source": "sheet",
+            "pk": None,
+        }
+        for sale in sheet_additions
+    ] + [
+        {
+            "date": addition.added_on,
+            "shop": addition.shop,
+            "product": addition.product,
+            "added": _money(addition.quantity),
+            "source": "manual",
+            "pk": addition.pk,
+        }
+        for addition in manual_additions
+    ]
     if not additions:
         return []
+    additions.sort(
+        key=lambda item: (
+            item["date"],
+            item["shop"].name,
+            item["product"].name,
+            item["product"].category,
+            item["source"],
+            item["pk"] or 0,
+        ),
+        reverse=True,
+    )
 
     # One query for every sale from the earliest addition to today, then a
     # running total per shop/product so each row's "since" figures are a
     # subtraction rather than another query.
-    first_day = min(sale.sale_date for sale in additions)
+    first_day = min(item["date"] for item in additions)
     per_day = {}
     for row in (
         DailySale.objects.filter(sale_date__range=(first_day, today))
@@ -1510,6 +1554,7 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
         per_day.setdefault((row["shop_id"], row["product_id"]), []).append(row)
 
     cumulative = {}
+    daily_totals = {}
     for key, rows in per_day.items():
         rows.sort(key=lambda row: row["sale_date"])
         totals = []
@@ -1519,20 +1564,24 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
             revenue += _money(row["revenue"])
             profit += _money(row["profit"])
             totals.append((row["sale_date"], units, revenue, profit))
+            daily_totals.setdefault(key, []).append(
+                (row["sale_date"], _money(row["units"]), _money(row["profit"]))
+            )
         cumulative[key] = totals
 
     unit_profits = {
         (card.shop_id, card.product_id): card.selling_price - card.cost_price
         for card in ShopProduct.objects.filter(
-            shop_id__in={sale.shop_id for sale in additions},
-            product_id__in={sale.product_id for sale in additions},
+            shop_id__in={item["shop"].pk for item in additions},
+            product_id__in={item["product"].pk for item in additions},
         )
     }
 
     rows = []
-    for sale in additions:
-        added = _money(sale.additional_stock)
-        totals = cumulative.get((sale.shop_id, sale.product_id), [])
+    for item in additions:
+        added = item["added"]
+        key = (item["shop"].pk, item["product"].pk)
+        totals = cumulative.get(key, [])
         if totals:
             _, units_to_date, revenue_to_date, profit_to_date = totals[-1]
         else:
@@ -1541,26 +1590,34 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
         # product's sales (and profit) from that day up to today.
         before = (Decimal("0.00"), Decimal("0.00"), Decimal("0.00"))
         for day, units, revenue, profit in totals:
-            if day >= sale.sale_date:
+            if day >= item["date"]:
                 break
             before = (units, revenue, profit)
+        daily = [
+            {"date": day, "units": day_units, "profit": day_profit}
+            for day, day_units, day_profit in daily_totals.get(key, [])
+            if day >= item["date"] and day_units
+        ]
         sold = units_to_date - before[0]
         revenue_to_date -= before[1]
         profit_to_date -= before[2]
         rows.append(
             {
-                "date": sale.sale_date,
-                "shop": sale.shop,
-                "product": sale.product,
+                "date": item["date"],
+                "shop": item["shop"],
+                "product": item["product"],
                 "added": added,
+                "source": item["source"],
+                "pk": item["pk"],
+                "daily": daily,
                 "sold": sold,
                 "remaining": max(added - sold, Decimal("0.00")),
                 "revenue": revenue_to_date,
                 "profit": profit_to_date,
                 "unit_profit": _money(
-                    unit_profits.get((sale.shop_id, sale.product_id), Decimal("0.00"))
+                    unit_profits.get((item["shop"].pk, item["product"].pk), Decimal("0.00"))
                 ),
-                "days": (today - sale.sale_date).days,
+                "days": (today - item["date"]).days,
             }
         )
     return rows
@@ -1694,6 +1751,51 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             return redirect("shop_profit_sheet", shop_pk=shop.pk)
         return super().get(request, *args, **kwargs)
 
+    def _stock_redirect_url(self, request):
+        """Return to the stock section with the filters the form was shown under."""
+        params = request.GET.copy()
+        for key in ("stock_start_date", "stock_end_date", "stock_shop"):
+            value = (request.POST.get(key) or "").strip()
+            if value:
+                params[key] = value
+            else:
+                params.pop(key, None)
+        query = params.urlencode()
+        url = reverse("product_report")
+        return f"{url}?{query}" if query else url
+
+    def post(self, request, *args, **kwargs):
+        """Record or remove a hand-entered stock addition.
+
+        The daily sheet only knows a shop's total stock for a day; this is the
+        escape hatch for deliveries that never made it onto a sheet, so the
+        stock-batch section can still measure the sales that followed them.
+        """
+        removal_id = request.POST.get("delete_stock_addition")
+        if removal_id:
+            addition = get_object_or_404(StockAddition, pk=removal_id)
+            label = f"{addition.quantity} × {addition.product} at {addition.shop}"
+            addition.delete()
+            messages.success(request, f"Removed manual stock addition: {label}.")
+            return redirect(self._stock_redirect_url(request))
+
+        form = StockAdditionForm(request.POST)
+        if form.is_valid():
+            addition = form.save(commit=False)
+            addition.recorded_by = request.user
+            addition.save()
+            messages.success(
+                request,
+                f"Added {addition.quantity} × {addition.product} at {addition.shop} "
+                f"on {addition.added_on}. Units sold and profit from that day are "
+                "counted in the stock section below.",
+            )
+            return redirect(self._stock_redirect_url(request))
+
+        context = self.get_context_data(**kwargs)
+        context["stock_form"] = form
+        return self.render_to_response(context, status=400)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         start_date, end_date = _all_shops_profit_date_range(self.request)
@@ -1772,6 +1874,12 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
         context["stock_today"] = today.isoformat()
         context["selected_stock_shop"] = selected_stock_shop
         context["stock_shop_filter"] = stock_shop_id
+        context.setdefault(
+            "stock_form",
+            StockAdditionForm(
+                initial={"shop": selected_stock_shop, "added_on": today}
+            ),
+        )
         return context
 
 

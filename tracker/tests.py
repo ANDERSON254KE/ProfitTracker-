@@ -21,7 +21,15 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from tracker.models import DailySale, MasterProduct, Shop, ShopDailyProfit, ShopExpense, ShopProduct
+from tracker.models import (
+    DailySale,
+    MasterProduct,
+    Shop,
+    ShopDailyProfit,
+    ShopExpense,
+    ShopProduct,
+    StockAddition,
+)
 from tracker.templatetags.money import ksh, signed_ksh, units
 from tracker.views import _stock_batch_profit_rows
 
@@ -1871,3 +1879,123 @@ class ProductReportFilterTests(BaseDataTestCase):
         self.assertEqual(len(lines), 3)
         self.assertTrue(lines[2].startswith("Gilbeys"))
         self.assertNotIn("Fig Tree", response.content.decode())
+
+
+class ManualStockAdditionTests(BaseDataTestCase):
+    """Stock the owner records by hand feeds the stock-batch report."""
+
+    def setUp(self):
+        super().setUp()
+        self.today = timezone.localdate()
+        self.added_day = self.today - timedelta(days=4)
+
+    def _add(self, quantity="20", added_on=None):
+        return StockAddition.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            added_on=added_on or self.added_day,
+            quantity=Decimal(quantity),
+            recorded_by=self.owner,
+        )
+
+    def test_manual_addition_reports_sales_and_per_day_breakdown(self):
+        self._add()
+        # 6 sold two days after the delivery, 4 more the day after that.
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys,
+            sale_date=self.added_day + timedelta(days=2), units_sold=Decimal("6"),
+            recorded_by=self.empire_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys,
+            sale_date=self.added_day + timedelta(days=3), units_sold=Decimal("4"),
+            recorded_by=self.empire_manager,
+        )
+
+        rows = _stock_batch_profit_rows(self.added_day, self.added_day)
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["source"], "manual")
+        self.assertEqual(row["added"], Decimal("20.00"))
+        self.assertEqual(row["sold"], Decimal("10.00"))
+        self.assertEqual(row["remaining"], Decimal("10.00"))
+        self.assertEqual(row["profit"], Decimal("1500.00"))
+        self.assertEqual(
+            [(day["date"], day["units"], day["profit"]) for day in row["daily"]],
+            [
+                (self.added_day + timedelta(days=2), Decimal("6.00"), Decimal("900.00")),
+                (self.added_day + timedelta(days=3), Decimal("4.00"), Decimal("600.00")),
+            ],
+        )
+
+    def test_manual_addition_respects_the_shop_filter(self):
+        self._add()
+
+        self.assertEqual(
+            _stock_batch_profit_rows(
+                self.added_day, self.added_day, shop_ids={self.fig_tree.pk}
+            ),
+            [],
+        )
+
+    def test_owner_can_add_stock_from_the_report_page(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("product_report"),
+            {
+                "shop": self.empire.pk,
+                "product": self.gilbeys.pk,
+                "added_on": self.added_day.isoformat(),
+                "quantity": "20",
+                "stock_start_date": self.added_day.isoformat(),
+                "stock_end_date": self.added_day.isoformat(),
+                "stock_shop": self.empire.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        addition = StockAddition.objects.get()
+        self.assertEqual(addition.quantity, Decimal("20.00"))
+        self.assertEqual(addition.recorded_by, self.owner)
+
+        page = self.client.get(
+            reverse("product_report"),
+            {
+                "stock_start_date": self.added_day.isoformat(),
+                "stock_end_date": self.added_day.isoformat(),
+            },
+        )
+        self.assertEqual(len(page.context["stock_rows"]), 1)
+        self.assertContains(page, "Manual")
+
+    def test_stock_for_a_product_the_shop_does_not_carry_is_rejected(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("product_report"),
+            {
+                "shop": self.empire.pk,
+                "product": self.blue_ice.pk,
+                "added_on": self.added_day.isoformat(),
+                "quantity": "5",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(StockAddition.objects.exists())
+        self.assertContains(
+            response, "This product is not stocked by the selected shop.", status_code=400
+        )
+
+    def test_owner_can_remove_a_manual_addition(self):
+        addition = self._add()
+        self.client.force_login(self.owner)
+
+        response = self.client.post(
+            reverse("product_report"), {"delete_stock_addition": addition.pk}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(StockAddition.objects.exists())
