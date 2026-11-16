@@ -99,6 +99,78 @@
     </details>
 </section>
 
+<section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div class="border-b border-slate-200 px-5 py-4">
+        <h2 class="text-base font-semibold text-slate-900">Stock added → profit to date</h2>
+        <p class="mt-1 text-sm text-slate-500">For every stock addition in the range, how much of that product the shop has sold since the day it was added up to {{ stock_today }}, and the profit those sales made.</p>
+    </div>
+    <form method="get" action="{% url 'product_report' %}" class="flex flex-wrap items-end gap-3 border-b border-slate-200 px-5 py-4">
+        <input type="hidden" name="start_date" value="{{ profit_start_date }}">
+        <input type="hidden" name="end_date" value="{{ profit_end_date }}">
+        {% if selected_report_shop %}<input type="hidden" name="report_shop" value="{{ selected_report_shop.pk }}">{% endif %}
+        {% if product_query %}<input type="hidden" name="product" value="{{ product_query }}">{% endif %}
+        <div>
+            <label for="stockStartDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Stock added from</label>
+            <input id="stockStartDate" name="stock_start_date" type="date" value="{{ stock_start_date }}" required
+                   class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+        </div>
+        <div>
+            <label for="stockEndDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">To</label>
+            <input id="stockEndDate" name="stock_end_date" type="date" value="{{ stock_end_date }}" required
+                   class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+        </div>
+        <div>
+            <label for="stockShop" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shop</label>
+            <select id="stockShop" name="stock_shop"
+                    class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                <option value="">All shops</option>
+                {% for shop in all_shops %}<option value="{{ shop.pk }}"{% if stock_shop_filter == shop.pk|stringformat:"d" %} selected{% endif %}>{{ shop.name }}</option>{% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Apply</button>
+        <p class="text-xs text-slate-500">Default: this month's additions to today.</p>
+    </form>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-5 py-3 text-left font-semibold">Added On</th>
+                    <th class="px-5 py-3 text-left font-semibold">Shop</th>
+                    <th class="px-5 py-3 text-left font-semibold">Product</th>
+                    <th class="px-5 py-3 text-right font-semibold">Units Added</th>
+                    <th class="px-5 py-3 text-right font-semibold">Sold Since</th>
+                    <th class="px-5 py-3 text-right font-semibold">Left</th>
+                    <th class="px-5 py-3 text-right font-semibold">Revenue Since</th>
+                    <th class="px-5 py-3 text-right font-semibold">Profit Since</th>
+                    <th class="px-5 py-3 text-right font-semibold">Profit / Unit</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in stock_rows %}
+                <tr class="hover:bg-slate-50">
+                    <td class="whitespace-nowrap px-5 py-3 text-slate-700">{{ row.date|date:"Y-m-d" }}<span class="block text-xs text-slate-400">{{ row.days }} day{{ row.days|pluralize }}</span></td>
+                    <td class="px-5 py-3 text-slate-700">{{ row.shop.name }}</td>
+                    <td class="px-5 py-3 font-medium text-slate-900">{{ row.product.name }}{% if row.product.category %}<span class="block text-xs font-normal text-slate-500">{{ row.product.category }}</span>{% endif %}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ row.added|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-900">{{ row.sold|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-900">{{ row.remaining|units }}</td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
+                    <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% elif row.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ row.profit|ksh }}</td>
+                    <td class="px-5 py-3 text-right text-slate-700">{{ row.unit_profit|ksh }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="px-5 py-6 text-center text-slate-500">No stock was added between {{ stock_start_date }} and {{ stock_end_date }}.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <p class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">
+        "Sold since" and "Profit since" count every sale of that product in that shop from the addition date to today, including stock that was already on the shelf. Rows for the same product and shop therefore overlap and must not be added together.
+    </p>
+</section>
+
 <div class="overflow-hidden rounded-xl bg-white shadow">
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -107,10 +179,10 @@
                     <th class="px-5 py-3 text-left font-semibold">Product</th>
                     <th class="px-5 py-3 text-left font-semibold">Category</th>
                     {% for shop in shops %}
-                    <th class="px-5 py-3 text-right font-semibold">{{ shop.name }}</th>
+                    <th class="px-5 py-3 text-right font-semibold">{{ shop.name }}<span class="block font-normal normal-case text-slate-400">Units / Profit</span></th>
                     {% endfor %}
-                    <th class="px-5 py-3 text-right font-semibold">Total Profit</th>
                     <th class="px-5 py-3 text-right font-semibold">Total Units</th>
+                    <th class="px-5 py-3 text-right font-semibold">Total Profit</th>
                     <th class="px-5 py-3 text-right font-semibold">Total Revenue</th>
                 </tr>
             </thead>
@@ -121,18 +193,12 @@
                     <td class="px-5 py-3 text-xs text-slate-500">{{ row.product.category|default:"—" }}</td>
                     {% for cell in row.shop_cells %}
                     <td class="px-5 py-3 text-right align-top">
-                        <span class="{% if cell.profit < 0 %}text-rose-600{% elif cell.profit > 0 %}text-slate-700{% else %}text-slate-300{% endif %}">
-                            {{ cell.profit|ksh }}
-                        </span>
-                        {% if cell.units > 0 %}
-                        <span class="block text-xs text-slate-400">{{ cell.units|units }} u</span>
-                        {% endif %}
+                        <span class="block font-medium text-slate-900">{{ cell.units|units }} u</span>
+                        <span class="block text-xs {% if cell.profit < 0 %}text-rose-600{% elif cell.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ cell.profit|ksh }}</span>
                     </td>
                     {% endfor %}
-                    <td class="px-5 py-3 text-right font-semibold {% if row.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                        {{ row.total_profit|ksh }}
-                    </td>
-                    <td class="px-5 py-3 text-right text-slate-700">{{ row.total_units|units }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ row.total_units|units }}</td>
+                    <td class="px-5 py-3 text-right font-semibold {% if row.total_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">{{ row.total_profit|ksh }}</td>
                     <td class="px-5 py-3 text-right text-slate-700">{{ row.total_revenue|ksh }}</td>
                 </tr>
                 {% empty %}

@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from tracker.models import DailySale, MasterProduct, Shop, ShopDailyProfit, ShopExpense, ShopProduct
 from tracker.templatetags.money import ksh, signed_ksh, units
+from tracker.views import _stock_batch_profit_rows
 
 CustomUser = get_user_model()
 
@@ -465,7 +466,7 @@ class ShopDetailViewTests(BaseDataTestCase):
         cards = {row["shop"].pk: row for row in response.context["shop_rows"]}
         fig = cards[self.fig_tree.pk]
         self.assertEqual(fig["today_profit"], Decimal("200.00"))   # 4 x Blue Ice
-        self.assertEqual(fig["week_profit"], Decimal("400.00"))    # today + 3 days ago
+        self.assertEqual(fig["week_profit"], Decimal("300.00"))    # 200 today + 100 three days ago
         self.assertEqual(cards[self.empire.pk]["today_profit"], Decimal("1500.00"))
 
     def test_cards_link_to_the_shop_report(self):
@@ -478,8 +479,8 @@ class ShopDetailViewTests(BaseDataTestCase):
         response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
         self.assertEqual(response.context["shop"], self.fig_tree)
         self.assertEqual(response.context["today_profit"], Decimal("200.00"))
-        self.assertEqual(response.context["week_profit"], Decimal("400.00"))
-        self.assertEqual(response.context["total_profit"], Decimal("400.00"))
+        self.assertEqual(response.context["week_profit"], Decimal("300.00"))
+        self.assertEqual(response.context["total_profit"], Decimal("300.00"))
         # One row per trading day, newest first.
         dates = [row["sale_date"] for row in response.context["day_rows"]]
         self.assertEqual(dates, sorted(dates, reverse=True))
@@ -500,7 +501,8 @@ class ShopDetailViewTests(BaseDataTestCase):
         )
         compared = [p["product_id"] for p in response.context["comparison_data"]]
         self.assertEqual(compared, [self.gilbeys.pk, self.blue_ice.pk])
-        self.assertEqual(response.context["comparison_chart"]["datasets"][0]["data"][-1], 200.0)
+        # Blue Ice (second dataset) sold today; Gilbeys sold three days ago.
+        self.assertEqual(response.context["comparison_chart"]["datasets"][1]["data"][-1], 200.0)
 
     def test_comparison_only_offers_the_shop_own_products(self):
         """A product the shop does not stock is quietly dropped."""
@@ -796,8 +798,9 @@ class ProductReportTests(BaseDataTestCase):
 
         lines = response.content.decode().splitlines()
         self.assertEqual(
-            lines[1], "Product,Category,Empire Shop profit,Fig Tree profit,"
-                      "Total Profit,Total Units,Total Revenue"
+            lines[1], "Product,Category,Empire Shop Units,Empire Shop Profit,"
+                      "Fig Tree Units,Fig Tree Profit,"
+                      "Total Units,Total Profit,Total Revenue"
         )
         gilbeys_row = next(line for line in lines if line.startswith("Gilbeys"))
         self.assertIn("1500.00", gilbeys_row)   # Empire cell
@@ -1647,3 +1650,224 @@ class ShopPriceSheetCommandTests(BaseDataTestCase):
 
         self.assertIn("unknown product", out.getvalue())
         self.assertFalse(MasterProduct.objects.filter(name="Mystery Item").exists())
+
+
+class StockBatchProfitTests(BaseDataTestCase):
+    """Profit from a stock addition date to today, per product and shop."""
+
+    def test_profit_counts_sales_from_the_addition_date_to_today(self):
+        today = timezone.localdate()
+        added_day = today - timedelta(days=5)
+
+        # 20 units added, none sold on the day.
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=added_day,
+            additional_stock=Decimal("20"),
+            total_stock=Decimal("20"),
+            closing_stock=Decimal("20"),
+            recorded_by=self.empire_manager,
+        )
+        # Later, 10 of them sold at Empire's 450/600 price (150 profit each).
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=today - timedelta(days=1),
+            total_stock=Decimal("20"),
+            closing_stock=Decimal("10"),
+            recorded_by=self.empire_manager,
+        )
+
+        rows = _stock_batch_profit_rows(added_day, added_day)
+
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["added"], Decimal("20.00"))
+        self.assertEqual(row["sold"], Decimal("10.00"))
+        self.assertEqual(row["remaining"], Decimal("10.00"))
+        self.assertEqual(row["profit"], Decimal("1500.00"))
+        self.assertEqual(row["revenue"], Decimal("6000.00"))
+        self.assertEqual(row["unit_profit"], Decimal("150.00"))
+
+    def test_sales_before_the_addition_are_excluded(self):
+        today = timezone.localdate()
+        added_day = today - timedelta(days=2)
+
+        # Sold out of existing stock the day before the addition.
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=added_day - timedelta(days=1),
+            units_sold=Decimal("4"),
+            recorded_by=self.empire_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=added_day,
+            additional_stock=Decimal("12"),
+            total_stock=Decimal("12"),
+            closing_stock=Decimal("9"),
+            recorded_by=self.empire_manager,
+        )
+
+        row = _stock_batch_profit_rows(added_day, added_day)[0]
+
+        self.assertEqual(row["sold"], Decimal("3.00"))
+        self.assertEqual(row["profit"], Decimal("450.00"))
+
+    def test_shops_and_date_range_filter_the_batches(self):
+        today = timezone.localdate()
+        old_day = today - timedelta(days=30)
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=old_day,
+            additional_stock=Decimal("5"),
+            total_stock=Decimal("5"),
+            closing_stock=Decimal("5"),
+            recorded_by=self.empire_manager,
+        )
+
+        self.assertEqual(
+            _stock_batch_profit_rows(today - timedelta(days=7), today), []
+        )
+        self.assertEqual(
+            _stock_batch_profit_rows(old_day, old_day, shop_ids={self.fig_tree.pk}), []
+        )
+        self.assertEqual(len(_stock_batch_profit_rows(old_day, old_day)), 1)
+
+    def test_report_page_shows_the_stock_batch_section(self):
+        today = timezone.localdate()
+        added_day = today - timedelta(days=5)
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=added_day,
+            additional_stock=Decimal("20"),
+            total_stock=Decimal("20"),
+            closing_stock=Decimal("20"),
+            recorded_by=self.empire_manager,
+        )
+        DailySale.objects.create(
+            shop=self.empire,
+            product=self.gilbeys,
+            sale_date=today - timedelta(days=1),
+            total_stock=Decimal("20"),
+            closing_stock=Decimal("10"),
+            recorded_by=self.empire_manager,
+        )
+
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            reverse("product_report"),
+            {
+                "stock_start_date": added_day.isoformat(),
+                "stock_end_date": added_day.isoformat(),
+                "stock_shop": self.empire.pk,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["stock_rows"]), 1)
+        self.assertContains(response, "Stock added → profit to date")
+        self.assertContains(response, "KSh 1,500.00")
+
+
+class ProfitSheetResubmitTests(BaseDataTestCase):
+    """Re-submitting a day replaces that day's entries instead of leaving stale ones."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.fig_manager)
+        self.day = timezone.localdate()
+        self.url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+
+    def _submit(self, value):
+        return self.client.post(
+            self.url,
+            {"date": self.day.isoformat(), "action": "save_sales",
+             f"units_{self.gilbeys.pk}": value},
+        )
+
+    def _entry(self):
+        return DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=self.day,
+            is_profit_sheet_entry=True,
+        ).first()
+
+    def test_zero_removes_the_entry(self):
+        self._submit("4")
+        self.assertIsNotNone(self._entry())
+        # Snapshot the day's profit, then zero the quantity.
+        self.client.post(
+            self.url,
+            {"date": self.day.isoformat(), "action": "calculate_daily_profit"},
+        )
+        self.assertEqual(
+            ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=self.day).gross_profit,
+            Decimal("400.00"),
+        )
+
+        self._submit("0")
+
+        self.assertIsNone(self._entry())
+        saved = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=self.day)
+        self.assertEqual(saved.gross_profit, Decimal("0.00"))
+
+    def test_positive_value_updates_the_same_entry(self):
+        self._submit("4")
+        self._submit("6")
+
+        self.assertEqual(
+            DailySale.objects.filter(
+                shop=self.fig_tree, product=self.gilbeys, sale_date=self.day,
+                is_profit_sheet_entry=True,
+            ).count(),
+            1,
+        )
+        self.assertEqual(self._entry().units_sold, Decimal("6"))
+
+    def test_blank_leaves_the_entry_unchanged(self):
+        self._submit("4")
+        self._submit("")
+
+        self.assertEqual(self._entry().units_sold, Decimal("4"))
+
+
+class ProductReportFilterTests(BaseDataTestCase):
+    """The reports page and its CSV honour the shop and product filters."""
+
+    def setUp(self):
+        super().setUp()
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, units_sold=Decimal("2"),
+            recorded_by=self.empire_manager,
+        )
+        self.client.force_login(self.owner)
+
+    def test_product_search_narrows_the_table(self):
+        response = self.client.get(reverse("product_report"), {"product": "Gilbeys"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [row["product"].name for row in response.context["rows"]], ["Gilbeys"]
+        )
+
+    def test_filters_reach_the_csv_export(self):
+        response = self.client.get(
+            reverse("product_report_csv"),
+            {"product": "Gilbeys", "report_shop": self.empire.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        lines = response.content.decode().splitlines()
+        self.assertEqual(
+            lines[1],
+            "Product,Category,Empire Shop Units,Empire Shop Profit,"
+            "Total Units,Total Profit,Total Revenue",
+        )
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[2].startswith("Gilbeys"))
+        self.assertNotIn("Fig Tree", response.content.decode())
