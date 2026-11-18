@@ -121,22 +121,25 @@ class DailySaleForm(forms.ModelForm):
 class DailySalesSheetForm(forms.Form):
     """Record a whole trading day for one shop in a single submit.
 
-    The manager fills three boxes per product -- additional stock, total stock
-    and closing stock -- and leaves untouched products blank. Opening stock is
-    *not* posted: it comes from ``openings`` (the previous day's closing
-    stock). Only stock figures cross the wire; units sold
-    (``total - closing``) and every money figure are derived server side by
+    The manager fills four boxes per product -- opening stock, additional
+    stock, total stock and closing stock -- and leaves untouched products
+    blank. Opening stock defaults to ``openings`` (the previous day's closing
+    stock) and is only taken from the browser when the manager overrides it.
+    Only stock figures cross the wire; units sold (``total - closing``) and
+    every money figure are derived server side by
     :meth:`tracker.models.DailySale.save`.
 
     Only products the shop stocks at a cost above zero appear on the sheet;
     a row for a no-cost or unstocked product is rejected outright.
 
-    One stock row exists per product per day: submitting again updates today's
-    row rather than appending, so re-entering a corrected count never
-    double-counts the day.
+    One row exists per product per day, whatever created it: submitting again
+    rewrites that day's row rather than appending, so a corrected count -- or a
+    manual entry already made for the same product and day -- is replaced
+    instead of double-counted.
     """
 
     #: Input prefixes used by the sheet template.
+    OPENING_PREFIX = "open_"
     ADDITIONAL_PREFIX = "add_"
     TOTAL_PREFIX = "total_"
     CLOSING_PREFIX = "close_"
@@ -191,7 +194,12 @@ class DailySalesSheetForm(forms.Form):
 
         product_ids = set()
         for raw_key in self.data:
-            for prefix in (self.ADDITIONAL_PREFIX, self.TOTAL_PREFIX, self.CLOSING_PREFIX):
+            for prefix in (
+                self.OPENING_PREFIX,
+                self.ADDITIONAL_PREFIX,
+                self.TOTAL_PREFIX,
+                self.CLOSING_PREFIX,
+            ):
                 if raw_key.startswith(prefix):
                     try:
                         product_ids.add(int(raw_key[len(prefix):]))
@@ -199,10 +207,14 @@ class DailySalesSheetForm(forms.Form):
                         pass
 
         for product_id in sorted(product_ids):
+            opening = self._parse(self.data.get(self.OPENING_PREFIX + str(product_id)))
             additional = self._parse(self.data.get(self.ADDITIONAL_PREFIX + str(product_id)))
             total = self._parse(self.data.get(self.TOTAL_PREFIX + str(product_id)))
             closing = self._parse(self.data.get(self.CLOSING_PREFIX + str(product_id)))
 
+            # Opening stock is pre-filled on every row, so it never decides
+            # whether a product counts as entered: only the three stock boxes
+            # the manager actually types into do.
             if additional is None and total is None and closing is None:
                 continue  # untouched row: nothing to record
 
@@ -219,6 +231,7 @@ class DailySalesSheetForm(forms.Form):
             bad = [
                 name
                 for name, value in (
+                    ("opening stock", opening),
                     ("additional stock", additional),
                     ("total stock", total),
                     ("closing stock", closing),
@@ -248,7 +261,8 @@ class DailySalesSheetForm(forms.Form):
                 )
                 continue
 
-            opening = Decimal(self.openings.get(product_id, Decimal("0.00")))
+            if opening is None:
+                opening = Decimal(self.openings.get(product_id, Decimal("0.00")))
             if total != opening + additional:
                 self.warnings.append(
                     f"{label}: total stock {total:f} does not match opening "
@@ -284,11 +298,14 @@ class DailySalesSheetForm(forms.Form):
         if not entries:
             return []
 
+        # Match every row for the day, not just stock entries: a product that
+        # was already recorded by hand (profit sheet or a legacy single sale)
+        # is rewritten into today's stock row instead of gaining a second row
+        # whose units would be added to the day's sales twice.
         existing = {
             sale.product_id: sale
-            for sale in DailySale.objects.filter(
-                shop=self.shop, sale_date=self.day, total_stock__isnull=False
-            )
+            for sale in DailySale.objects.filter(shop=self.shop, sale_date=self.day)
+            .order_by("pk")
         }
 
         saved = []
@@ -302,6 +319,7 @@ class DailySalesSheetForm(forms.Form):
                 )
             else:
                 sale.recorded_by = recorder
+            sale.is_profit_sheet_entry = False
             sale.opening_stock = figures["opening"]
             sale.additional_stock = figures["additional"]
             sale.total_stock = figures["total"]

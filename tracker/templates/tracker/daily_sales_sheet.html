@@ -41,7 +41,7 @@
         <div class="border-b border-slate-200 bg-slate-50 px-5 py-3">
             <p class="text-sm text-slate-500">
                 Products are listed in the same order as the price list, from 250ml down to soda.
-                Opening stock is yesterday's closing stock. Enter the stock received (additional),
+                Opening stock defaults to yesterday's closing stock and can be corrected. Enter the stock received (additional),
                 the counted <strong>total stock</strong> and the <strong>closing stock</strong> at the end of the day —
                 units sold and the amount sold are worked out automatically.
                 Leave a whole row blank if the product had no activity. Rows saved earlier today are pre-filled;
@@ -55,52 +55,67 @@
                 This shop has no active products yet. Ask the owner to add pricing for this branch first.
             </div>
         {% else %}
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-200 text-sm">
-                    <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <div class="w-full overflow-x-auto">
+                <table class="w-full table-fixed divide-y divide-slate-200 text-sm">
+                    <colgroup>
+                        <col class="w-[26%]">
+                        <col class="w-[12%]">
+                        <col class="w-[11%]">
+                        <col class="w-[10%]">
+                        <col class="w-[10%]">
+                        <col class="w-[10%]">
+                        <col class="w-[8%]">
+                        <col class="w-[13%]">
+                    </colgroup>
+                    <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                         <tr>
-                            <th class="px-4 py-3 text-left font-semibold">Product</th>
-                            <th class="px-4 py-3 text-right font-semibold">Selling price</th>
-                            <th class="px-4 py-3 text-right font-semibold" title="Yesterday's closing stock">Opening</th>
-                            <th class="px-4 py-3 text-right font-semibold">Additional</th>
-                            <th class="px-4 py-3 text-right font-semibold">Total stock</th>
-                            <th class="px-4 py-3 text-right font-semibold">Closing stock</th>
-                            <th class="px-4 py-3 text-right font-semibold">Sold</th>
-                            <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                            <th class="px-2 py-3 text-left font-semibold sm:px-3">Product</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Selling</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3" title="Defaults to yesterday's closing stock; type a different figure to correct it">Opening</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Add</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Total</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Closing</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Sold</th>
+                            <th class="px-2 py-3 text-right font-semibold sm:px-3">Amount</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         {% for row in rows %}
                             <tr class="hover:bg-slate-50" data-price="{{ row.price }}" data-opening="{{ row.opening }}">
-                                <td class="px-4 py-2.5 whitespace-nowrap">
+                                <td class="px-2 py-2 break-words sm:px-3">
                                     <span class="font-medium text-slate-900">{{ row.product.name }}</span>
-                                    <span class="ml-1 text-xs text-slate-400">{{ row.product.category }}</span>
-                                    {% if row.entry %}<span class="ml-1 text-xs text-emerald-600" title="Saved earlier today">✓</span>{% endif %}
+                                    <span class="block text-[11px] text-slate-400">{{ row.product.category }}</span>
+                                    {% if row.entry %}<span class="text-[11px] text-emerald-600" title="Saved earlier today">✓ saved</span>{% endif %}
                                 </td>
-                                <td class="px-4 py-2.5 text-right text-slate-700">{{ row.price|ksh }}</td>
-                                <td class="px-4 py-2.5 text-right text-slate-500" title="Yesterday's closing stock">{{ row.opening|units }}</td>
-                                <td class="px-4 py-2.5 text-right">
+                                <td class="px-2 py-2 text-right text-[11px] text-slate-700 tabular-nums sm:px-3 sm:text-sm">{{ row.price|ksh }}</td>
+                                <td class="px-2 py-2 text-right">
+                                    <input type="number" name="open_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                           value="{{ row.opening_input }}"
+                                           class="in-open stock-input w-full min-w-0 rounded-lg border-slate-300 px-2 py-1.5 text-right text-sm tabular-nums shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           title="Yesterday's closing stock" placeholder="0">
+                                </td>
+                                <td class="px-2 py-2 text-right">
                                     <input type="number" name="add_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
                                            value="{{ row.additional_input }}"
-                                           class="in-add stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           class="in-add stock-input w-full min-w-0 rounded-lg border-slate-300 px-2 py-1.5 text-right text-sm tabular-nums shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                            placeholder="0">
                                 </td>
-                                <td class="px-4 py-2.5 text-right">
+                                <td class="px-2 py-2 text-right">
                                     <input type="number" name="total_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
                                            value="{{ row.total_input }}"
-                                           class="in-total stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           class="in-total stock-input w-full min-w-0 rounded-lg border-slate-300 px-2 py-1.5 text-right text-sm tabular-nums shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                            placeholder="0">
                                 </td>
-                                <td class="px-4 py-2.5 text-right">
+                                <td class="px-2 py-2 text-right">
                                     <input type="number" name="close_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
                                            value="{{ row.closing_input }}"
-                                           class="in-close stock-input w-24 rounded-lg border-slate-300 py-1.5 text-right text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                           class="in-close stock-input w-full min-w-0 rounded-lg border-slate-300 px-2 py-1.5 text-right text-sm tabular-nums shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                            placeholder="0">
                                 </td>
-                                <td class="px-4 py-2.5 text-right font-medium text-slate-700 row-sold">
+                                <td class="px-2 py-2 text-right font-medium text-slate-700 row-sold tabular-nums sm:px-3">
                                     {% if row.entry %}{{ row.sold|units }}{% else %}—{% endif %}
                                 </td>
-                                <td class="px-4 py-2.5 text-right text-slate-700 row-revenue">
+                                <td class="px-2 py-2 text-right text-[11px] text-slate-700 row-revenue tabular-nums sm:px-3 sm:text-sm">
                                     {% if row.entry %}{{ row.amount|ksh }}{% else %}—{% endif %}
                                 </td>
                             </tr>
@@ -148,7 +163,10 @@
                 const closing = num(row.querySelector(".in-close"));
                 const totalInput = row.querySelector(".in-total");
                 const closeInput = row.querySelector(".in-close");
-                const opening = parseFloat(row.dataset.opening) || 0;
+                const openingInput = row.querySelector(".in-open");
+                const opening = openingInput && openingInput.value !== ""
+                    ? (parseFloat(openingInput.value) || 0)
+                    : (parseFloat(row.dataset.opening) || 0);
                 const price = parseFloat(row.dataset.price) || 0;
 
                 const cells = {

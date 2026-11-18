@@ -472,6 +472,11 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
                     "cost": card.cost_price,
                     "price": card.selling_price,
                     "opening": openings.get(card.product_id, Decimal("0.00")),
+                    "opening_input": _input_value(
+                        entry.opening_stock
+                        if entry and entry.opening_stock is not None
+                        else openings.get(card.product_id, Decimal("0.00"))
+                    ),
                     "entry": entry,
                     "additional_input": _input_value(
                         entry.additional_stock if entry else None
@@ -523,6 +528,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             for row in context["rows"]:
                 key = row["product"].pk
                 for name, prefix in (
+                    ("opening_input", DailySalesSheetForm.OPENING_PREFIX),
                     ("additional_input", DailySalesSheetForm.ADDITIONAL_PREFIX),
                     ("total_input", DailySalesSheetForm.TOTAL_PREFIX),
                     ("closing_input", DailySalesSheetForm.CLOSING_PREFIX),
@@ -591,11 +597,15 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         unpriced_products = ShopProduct.objects.filter(
             shop=self.shop, is_active=True, cost_price__lte=0
         ).select_related("product").order_by("product__name", "product__category")
+        # Every non-stock row for the day is prefilled, not only this sheet's
+        # own entries: a legacy single sale for the same product and day would
+        # otherwise stay on the books while the units typed here are added as a
+        # second row.
         manual_sales = {
             sale.product_id: sale
             for sale in DailySale.objects.filter(
-                shop=self.shop, sale_date=day, is_profit_sheet_entry=True
-            )
+                shop=self.shop, sale_date=day, total_stock__isnull=True
+            ).order_by("pk")
         }
         stock_products = set(
             DailySale.objects.filter(
@@ -743,11 +753,13 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             cards = list(ShopProduct.objects.filter(
                 shop=self.shop, is_active=True, cost_price__gt=0
             ).select_related("product"))
+            # Any non-stock row for the day is updated in place, so re-entering
+            # units replaces the day's figure instead of adding a second row.
             existing_sales = {
                 sale.product_id: sale
                 for sale in DailySale.objects.filter(
-                    shop=self.shop, sale_date=day, is_profit_sheet_entry=True
-                )
+                    shop=self.shop, sale_date=day, total_stock__isnull=True
+                ).order_by("pk")
             }
             stock_products = set(
                 DailySale.objects.filter(
@@ -805,6 +817,8 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                         )
                     else:
                         sale.units_sold = units
+                        sale.is_profit_sheet_entry = True
+                        sale.recorded_by = request.user
                     sale.save()
 
                 for expense_day, amount in entries:
@@ -888,11 +902,13 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         cards = list(ShopProduct.objects.filter(
             shop=self.shop, is_active=True, cost_price__gt=0
         ).select_related("product"))
+        # Any non-stock row for the day is updated in place, so re-entering
+        # units replaces the day's figure instead of adding a second row.
         existing_sales = {
             sale.product_id: sale
             for sale in DailySale.objects.filter(
-                shop=self.shop, sale_date=day, is_profit_sheet_entry=True
-            )
+                shop=self.shop, sale_date=day, total_stock__isnull=True
+            ).order_by("pk")
         }
         stock_products = set(
             DailySale.objects.filter(
@@ -955,6 +971,8 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                     )
                 else:
                     sale.units_sold = units
+                    sale.is_profit_sheet_entry = True
+                    sale.recorded_by = request.user
                 sale.save()
             self._save_daily_profit(day, request.user, create=False)
 

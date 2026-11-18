@@ -2024,3 +2024,101 @@ class ManualStockAdditionTests(BaseDataTestCase):
         self.assertEqual(totals["profit"], Decimal("750.00"))
         self.assertEqual(totals["unit_profit"], Decimal("150.00"))
         self.assertContains(page, "Totals")
+
+
+class SingleRowPerDayTests(BaseDataTestCase):
+    """One sale row per shop, product and day, whatever recorded it."""
+
+    def test_opening_stock_can_be_corrected_by_hand(self):
+        self.client.force_login(self.fig_manager)
+
+        self.client.post(
+            reverse("daily_sales_sheet"),
+            {
+                f"open_{self.gilbeys.pk}": "5",
+                f"add_{self.gilbeys.pk}": "10",
+                f"total_{self.gilbeys.pk}": "15",
+                f"close_{self.gilbeys.pk}": "3",
+            },
+        )
+
+        sale = DailySale.objects.get(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=timezone.localdate()
+        )
+        self.assertEqual(sale.opening_stock, Decimal("5.00"))
+        self.assertEqual(sale.units_sold, Decimal("12.00"))
+
+    def test_stock_sheet_rewrites_a_manual_entry_for_the_same_day(self):
+        day = timezone.localdate()
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+            units_sold=Decimal("4"), is_profit_sheet_entry=True,
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+
+        self.client.post(
+            reverse("daily_sales_sheet"),
+            {
+                f"add_{self.gilbeys.pk}": "10",
+                f"total_{self.gilbeys.pk}": "10",
+                f"close_{self.gilbeys.pk}": "3",
+            },
+        )
+
+        rows = DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day
+        )
+        self.assertEqual(rows.count(), 1)
+        sale = rows.get()
+        self.assertTrue(sale.is_stock_entry)
+        self.assertFalse(sale.is_profit_sheet_entry)
+        # Sold comes from the count (10 - 3), not from the replaced manual 4.
+        self.assertEqual(sale.units_sold, Decimal("7.00"))
+
+    def test_profit_sheet_units_entered_twice_keep_the_latest(self):
+        day = timezone.localdate()
+        url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        self.client.force_login(self.fig_manager)
+
+        for units in ("5", "7"):
+            self.client.post(
+                url,
+                {
+                    "action": "calculate_daily_profit",
+                    "date": day.isoformat(),
+                    f"units_{self.gilbeys.pk}": units,
+                },
+            )
+
+        rows = DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day
+        )
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.get().units_sold, Decimal("7.00"))
+
+    def test_profit_sheet_entry_replaces_an_older_sale_for_the_same_day(self):
+        day = timezone.localdate()
+        legacy = DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+            units_sold=Decimal("3"), recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+
+        self.client.post(
+            reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
+            {
+                "action": "calculate_daily_profit",
+                "date": day.isoformat(),
+                f"units_{self.gilbeys.pk}": "8",
+            },
+        )
+
+        rows = DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day
+        )
+        self.assertEqual(rows.count(), 1)
+        sale = rows.get()
+        self.assertEqual(sale.pk, legacy.pk)
+        self.assertEqual(sale.units_sold, Decimal("8.00"))
+        self.assertTrue(sale.is_profit_sheet_entry)
