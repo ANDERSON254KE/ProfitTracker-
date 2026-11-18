@@ -14,7 +14,14 @@ from decimal import Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from .models import DailySale, MasterProduct, Shop, ShopProduct, StockAddition
+from .models import (
+    DailySale,
+    MasterProduct,
+    Shop,
+    ShopDailyCash,
+    ShopProduct,
+    StockAddition,
+)
 
 #: Upper bound on products in one sheet submission, so a crafted POST cannot ask
 #: the server to write an unbounded number of rows.
@@ -118,15 +125,49 @@ class DailySaleForm(forms.ModelForm):
         return instance
 
 
+class ShopDailyCashForm(forms.ModelForm):
+    """M-Pesa and bill figures for one shop's trading day.
+
+    Total sales, cash and the balance carried forward are never posted: they
+    are derived by the view from the day's product sales and expenses.
+    """
+
+    class Meta:
+        model = ShopDailyCash
+        fields = ["mpesa", "bill_out", "bill_paid"]
+        widgets = {
+            name: forms.NumberInput(
+                attrs={
+                    "inputmode": "decimal",
+                    "step": "0.01",
+                    "min": "0",
+                    "class": (
+                        "block w-full rounded-lg border border-slate-300 bg-white "
+                        "px-3 py-2 text-right text-sm tabular-nums shadow-sm "
+                        "focus:border-indigo-500 focus:ring-indigo-500"
+                    ),
+                }
+            )
+            for name in ("mpesa", "bill_out", "bill_paid")
+        }
+
+    def __init__(self, *args, **kwargs):
+        """Let any of the three boxes be left empty, which means zero."""
+        super().__init__(*args, **kwargs)
+        for name in ("mpesa", "bill_out", "bill_paid"):
+            self.fields[name].required = False
+
+
 class DailySalesSheetForm(forms.Form):
     """Record a whole trading day for one shop in a single submit.
 
-    The manager fills four boxes per product -- opening stock, additional
-    stock, total stock and closing stock -- and leaves untouched products
-    blank. Opening stock defaults to ``openings`` (the previous day's closing
-    stock) and is only taken from the browser when the manager overrides it.
-    Only stock figures cross the wire; units sold (``total - closing``) and
-    every money figure are derived server side by
+    The manager fills three boxes per product -- opening stock, additional
+    stock and closing stock -- and leaves untouched products blank. Opening
+    stock defaults to ``openings`` (the previous day's closing stock) and is
+    only taken from the browser when the manager overrides it. Total stock is
+    ``opening + additional``; a ``total_`` value is still accepted for older
+    clients but is not required. Only stock figures cross the wire; units sold
+    (``total - closing``) and every money figure are derived server side by
     :meth:`tracker.models.DailySale.save`.
 
     Only products the shop stocks at a cost above zero appear on the sheet;
@@ -242,16 +283,24 @@ class DailySalesSheetForm(forms.Form):
                 self.add_error(None, f"{label}: enter a positive number for {', '.join(bad)}.")
                 continue
 
-            if total is None or closing is None:
+            if closing is None:
                 self.add_error(
                     None,
-                    f"{label}: total stock and closing stock are required "
+                    f"{label}: closing stock is required "
                     "(leave the whole row blank if the product had no activity).",
                 )
                 continue
 
             if additional is None:
                 additional = Decimal("0.00")
+
+            if opening is None:
+                opening = Decimal(self.openings.get(product_id, Decimal("0.00")))
+
+            # Total stock is what the shelf should hold: opening + additions.
+            # Nothing was typed for it, so derive it from the two figures.
+            if total is None:
+                total = opening + additional
 
             if closing > total:
                 self.add_error(
@@ -261,14 +310,16 @@ class DailySalesSheetForm(forms.Form):
                 )
                 continue
 
-            if opening is None:
-                opening = Decimal(self.openings.get(product_id, Decimal("0.00")))
-            if total != opening + additional:
-                self.warnings.append(
-                    f"{label}: total stock {total:f} does not match opening "
-                    f"{opening:f} + additional {additional:f} = "
-                    f"{opening + additional:f}. Saved anyway -- double-check the count."
+            if self.data.get(self.TOTAL_PREFIX + str(product_id)) is not None:
+                typed_total = self._parse(
+                    self.data.get(self.TOTAL_PREFIX + str(product_id))
                 )
+                if typed_total is not None and typed_total != opening + additional:
+                    self.warnings.append(
+                        f"{label}: total stock {typed_total:f} does not match opening "
+                        f"{opening:f} + additional {additional:f} = "
+                        f"{opening + additional:f}. Saved anyway -- double-check the count."
+                    )
 
             entries[product_id] = {
                 "opening": opening,

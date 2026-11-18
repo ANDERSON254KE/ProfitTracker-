@@ -36,6 +36,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from .forms import (
     DailySaleForm,
     DailySalesSheetForm,
+    ShopDailyCashForm,
     ShopPricingForm,
     StockAdditionForm,
 )
@@ -50,6 +51,7 @@ from .models import (
     DailySale,
     MasterProduct,
     Shop,
+    ShopDailyCash,
     ShopDailyProfit,
     ShopExpense,
     ShopProduct,
@@ -121,6 +123,12 @@ def _parse_date(value):
 def _shop_sales(shop):
     """Return the DailySale queryset for one shop (used by both dashboards)."""
     return DailySale.objects.filter(shop=shop).select_related("product", "recorded_by")
+
+
+def _display_name(first_name, last_name, username) -> str:
+    """Return a person's name for display, falling back to the username."""
+    full = f"{first_name or ''} {last_name or ''}".strip()
+    return full or username or ""
 
 
 def _input_value(value) -> str:
@@ -409,10 +417,11 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 
     ``GET`` lists the shop's products in the owner's price-list row order
     (250ml first, down to soda) with their opening stock -- the previous day's
-    closing stock -- and boxes for additional stock, total stock and closing
-    stock; sold units and the amount sold are derived server side. Products
-    with no cost price are not shown: they cannot produce a profit, so the
-    owner must price them first.
+    closing stock --, the selling price and boxes for additional stock and
+    closing stock; total stock, sold units and the amount sold are derived
+    server side. Products with no cost price are not shown: they cannot produce
+    a profit, so the owner must price them first. ``sections`` groups the rows
+    by category (250ml, 500ml, soda ...) for the sheet's filter chips.
 
     ``POST`` upserts one stock row per filled-in product for today: submitting
     again replaces today's figures instead of double-counting them.
@@ -469,6 +478,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             rows.append(
                 {
                     "product": card.product,
+                    "section": card.product.category.strip() or "Uncategorised",
                     "cost": card.cost_price,
                     "price": card.selling_price,
                     "opening": openings.get(card.product_id, Decimal("0.00")),
@@ -497,11 +507,20 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             units=Sum("units_sold"),
         )
 
+        # Filter chips, in sheet order (250ml ... soda) with a row count each.
+        section_counts = {}
+        for row in rows:
+            section_counts[row["section"]] = section_counts.get(row["section"], 0) + 1
+
         return {
             "shop": shop,
             "today": today,
             "openings": openings,
             "rows": rows,
+            "sections": [
+                {"name": name, "count": count}
+                for name, count in section_counts.items()
+            ],
             "has_products": bool(rows),
             "day_revenue": _money(day["revenue"]),
             "day_cost": _money(day["cost"]),
@@ -549,8 +568,8 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         if not sales:
             messages.warning(
                 request,
-                "Nothing was entered. Fill in additional stock, total stock and "
-                "closing stock for the products that changed, or leave a row blank.",
+                "Nothing was entered. Fill in additional stock and closing stock "
+                "for the products that changed, or leave a row blank.",
             )
             return redirect("daily_sales_sheet")
 
@@ -2055,22 +2074,51 @@ def _shop_report_data(shop):
 
     Returns ``(day_rows, top_products, totals)``:
 
-    * ``day_rows`` -- one row per trading day, newest first: profit, units
-      and revenue for that date.
+    * ``day_rows`` -- one row per trading day, newest first: profit, units,
+      revenue, that day's expenses and net profit, plus the people who
+      recorded something at the shop that day (``staff``).
     * ``top_products`` -- the shop's best sellers ordered by units sold.
     * ``totals`` -- the shop's all-time profit, units and revenue.
     """
-    sales = DailySale.objects.filter(shop=shop)
+    sales = DailySale.objects.filter(shop=shop).order_by()
 
     day_rows = list(
         sales.values("sale_date")
         .annotate(profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue"))
         .order_by("-sale_date")
     )
+
+    # Who was at work each day: everyone who recorded a sale at the shop.
+    # There is no attendance log, so the recorder on each row is the proxy.
+    staff_by_day = {}
+    for person in sales.values(
+        "sale_date",
+        "recorded_by__first_name",
+        "recorded_by__last_name",
+        "recorded_by__username",
+    ).distinct():
+        staff_by_day.setdefault(person["sale_date"], set()).add(
+            _display_name(
+                person["recorded_by__first_name"],
+                person["recorded_by__last_name"],
+                person["recorded_by__username"],
+            )
+        )
+
+    expenses_by_day = {
+        row["expense_date"]: _money(row["total"])
+        for row in ShopExpense.objects.filter(shop=shop)
+        .order_by()
+        .values("expense_date")
+        .annotate(total=Sum("amount"))
+    }
     for row in day_rows:
         row["profit"] = _money(row["profit"])
         row["units"] = _money(row["units"])
         row["revenue"] = _money(row["revenue"])
+        row["expenses"] = expenses_by_day.get(row["sale_date"], Decimal("0.00"))
+        row["net"] = (row["profit"] - row["expenses"]).quantize(Decimal("0.01"))
+        row["staff"] = ", ".join(sorted(staff_by_day.get(row["sale_date"], ())))
 
     top_products = list(
         sales.values("product_id", "product__name", "product__category")
@@ -2227,9 +2275,69 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
             context["comparison_data"] = []
             context["comparison_chart"] = None
 
+        # --- Today's cash sheet: M-Pesa, bills and the balance carried over ---
+        cash_record = ShopDailyCash.objects.filter(
+            shop=shop, cash_date=today
+        ).first()
+        today_expenses = list(
+            ShopExpense.objects.filter(shop=shop, expense_date=today).order_by("created_at")
+        )
+        expense_today = sum(
+            (expense.amount for expense in today_expenses), Decimal("0.00")
+        )
+        mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
+        bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
+        bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
+
+        # Total sales come from the products recorded on the sheet today. The
+        # M-Pesa figure splits off its share, the rest is cash, and the day's
+        # expenses and bills come out of what is left.
+        total_sales = context["today_revenue"]
+        cash = total_sales - mpesa
+        context["cash_form"] = ShopDailyCashForm(instance=cash_record)
+        context["today_expenses"] = today_expenses
+        context["cash_summary"] = {
+            "total_sales": total_sales,
+            "mpesa": mpesa,
+            "cash": cash,
+            "expenses": expense_today,
+            "bill_out": bill_out,
+            "bill_paid": bill_paid,
+            "balance": (cash + bill_paid - expense_today - bill_out).quantize(
+                Decimal("0.01")
+            ),
+        }
+
         context["csv_export_url"] = reverse("shop_report_csv", args=[shop.pk])
         context["pricing_url"] = f"{reverse('shop_pricing')}?shop={shop.pk}"
         return context
+
+    def post(self, request, *args, **kwargs):
+        """Save today's M-Pesa and bill figures, then return to the report."""
+        self.object = self.get_object()
+        form = ShopDailyCashForm(request.POST)
+        if form.is_valid():
+            ShopDailyCash.objects.update_or_create(
+                shop=self.object,
+                cash_date=timezone.localdate(),
+                defaults={
+                    "mpesa": form.cleaned_data["mpesa"] or Decimal("0.00"),
+                    "bill_out": form.cleaned_data["bill_out"] or Decimal("0.00"),
+                    "bill_paid": form.cleaned_data["bill_paid"] or Decimal("0.00"),
+                    "recorded_by": request.user,
+                },
+            )
+            messages.success(
+                request, f"Today's cash sheet saved for {self.object.name}."
+            )
+        else:
+            errors = " ".join(
+                f"{field}: {error}"
+                for field, field_errors in form.errors.items()
+                for error in field_errors
+            )
+            messages.error(request, f"Cash sheet not saved. {errors}")
+        return redirect("shop_detail", pk=self.object.pk)
 
 
 class ShopReportCSVView(OwnerRequiredMixin, View):

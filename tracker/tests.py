@@ -25,6 +25,7 @@ from tracker.models import (
     DailySale,
     MasterProduct,
     Shop,
+    ShopDailyCash,
     ShopDailyProfit,
     ShopExpense,
     ShopProduct,
@@ -493,6 +494,59 @@ class ShopDetailViewTests(BaseDataTestCase):
         dates = [row["sale_date"] for row in response.context["day_rows"]]
         self.assertEqual(dates, sorted(dates, reverse=True))
         self.assertEqual(len(dates), 2)
+
+    def test_each_day_names_the_staff_and_subtracts_expenses(self):
+        """The daily rows carry who recorded sales that day and the net profit."""
+        ShopExpense.objects.create(
+            shop=self.fig_tree, expense_date=timezone.localdate(),
+            description="Water", amount=Decimal("50.00"), recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        today_row = response.context["day_rows"][0]
+        self.assertEqual(today_row["sale_date"], timezone.localdate())
+        self.assertEqual(today_row["staff"], "figtree")
+        self.assertEqual(today_row["expenses"], Decimal("50.00"))
+        self.assertEqual(today_row["net"], Decimal("150.00"))   # 200 profit - 50
+        self.assertContains(response, "On Duty")
+
+    def test_today_cash_sheet_saves_and_derives_cash_and_balance(self):
+        """M-Pesa is typed; cash and the carried balance are worked out."""
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"mpesa": "120", "bill_out": "30", "bill_paid": "10"},
+        )
+        self.assertEqual(response.status_code, 302)
+        record = ShopDailyCash.objects.get(
+            shop=self.fig_tree, cash_date=timezone.localdate()
+        )
+        self.assertEqual(record.mpesa, Decimal("120.00"))
+
+        page = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        summary = page.context["cash_summary"]
+        self.assertEqual(summary["total_sales"], Decimal("800.00"))  # 4 x Blue Ice
+        self.assertEqual(summary["cash"], Decimal("680.00"))         # 800 - 120
+        self.assertEqual(summary["balance"], Decimal("660.00"))      # 680 + 10 - 30
+
+        # Posting again replaces the day instead of adding a second record.
+        self.client.post(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"mpesa": "100", "bill_out": "0", "bill_paid": "0"},
+        )
+        self.assertEqual(
+            ShopDailyCash.objects.filter(shop=self.fig_tree).count(), 1
+        )
+        page = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        self.assertEqual(page.context["cash_summary"]["cash"], Decimal("700.00"))
+
+    def test_today_cash_sheet_rejects_a_negative_figure(self):
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"mpesa": "-5", "bill_out": "0", "bill_paid": "0"},
+        )
+        self.assertFalse(ShopDailyCash.objects.exists())
 
     def test_most_sold_products_are_ranked_by_units(self):
         self.client.force_login(self.owner)
@@ -1307,9 +1361,12 @@ class DailySalesSheetTests(BaseDataTestCase):
         self.assertIn("Gilbeys", names)
         self.assertIn("Blue Ice", names)
         self.assertNotIn("money in the form", response.content.decode())
-        # The stock boxes are present for each product.
-        self.assertContains(response, f'name="total_{self.gilbeys.pk}"')
+        # The stock boxes are present for each product. Total stock is derived
+        # (opening + additional), so it is not one of the boxes.
+        self.assertContains(response, f'name="open_{self.gilbeys.pk}"')
+        self.assertContains(response, f'name="add_{self.gilbeys.pk}"')
         self.assertContains(response, f'name="close_{self.gilbeys.pk}"')
+        self.assertNotContains(response, f'name="total_{self.gilbeys.pk}"')
 
     def test_a_whole_day_saves_in_one_submit(self):
         self.client.force_login(self.fig_manager)
@@ -1334,6 +1391,20 @@ class DailySalesSheetTests(BaseDataTestCase):
         # 10 x (200 - 150) = 500
         self.assertEqual(blue_ice.units_sold, Decimal("10.00"))
         self.assertEqual(blue_ice.profit, Decimal("500.00"))
+
+    def test_total_stock_is_derived_when_it_is_not_typed(self):
+        """The sheet only asks for opening, additional and closing stock."""
+        self.client.force_login(self.fig_manager)
+        response = self.post_stock(
+            (self.gilbeys, {"additional": "10", "closing": "6"}),
+        )
+        self.assertRedirects(response, reverse(self.SHEET))
+
+        gilbeys = DailySale.objects.get(product=self.gilbeys)
+        # Total = opening (0) + additional (10); sold = 10 - closing (6).
+        self.assertEqual(gilbeys.total_stock, Decimal("10.00"))
+        self.assertEqual(gilbeys.units_sold, Decimal("4.00"))
+        self.assertEqual(gilbeys.total_revenue, Decimal("2200.00"))
 
     def test_opening_stock_comes_from_yesterdays_closing(self):
         yesterday = timezone.localdate() - timedelta(days=1)

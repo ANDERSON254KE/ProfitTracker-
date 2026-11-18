@@ -394,6 +394,60 @@ class ShopExpense(models.Model):
         return f"{self.description}: {self.amount} at {self.shop} on {self.expense_date}"
 
 
+class ShopDailyCash(models.Model):
+    """The cash side of one shop's trading day: M-Pesa and the bills.
+
+    Product sales already give the day's total sales, so only the payment
+    split and the bills are kept here:
+
+    * ``cash`` -- ``total sales - mpesa`` (what was taken in notes and coins).
+    * ``balance`` -- ``cash + bill_paid - expenses - bill_out``, the money the
+      shop carries into the next day.
+
+    Expenses are never duplicated: they are the :class:`ShopExpense` rows for
+    the same shop and day.
+    """
+
+    shop = models.ForeignKey(
+        Shop, on_delete=models.CASCADE, related_name="daily_cash_records"
+    )
+    cash_date = LocalDateField("Date", default=timezone.localdate, db_index=True)
+    mpesa = models.DecimalField(
+        "M-Pesa", max_digits=14, decimal_places=2, default=0, validators=MONEY_VALIDATORS
+    )
+    bill_out = models.DecimalField(
+        "Bill Out",
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=MONEY_VALIDATORS,
+        help_text="Credit given to customers that day.",
+    )
+    bill_paid = models.DecimalField(
+        "Bill Paid",
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=MONEY_VALIDATORS,
+        help_text="Money collected on earlier bills that day.",
+    )
+    recorded_by = models.ForeignKey(
+        CustomUser, on_delete=models.PROTECT, related_name="recorded_daily_cash"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-cash_date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shop", "cash_date"], name="unique_shop_daily_cash_date"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.shop} cash on {self.cash_date}: M-Pesa {self.mpesa}"
+
+
 class ShopDailyProfit(models.Model):
     """Saved daily sales, expense and net-profit calculation for one shop."""
 

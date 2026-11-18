@@ -12,6 +12,7 @@ from .models import (
     DailySale,
     MasterProduct,
     Shop,
+    ShopDailyCash,
     ShopDailyProfit,
     ShopExpense,
     ShopProduct,
@@ -100,6 +101,16 @@ class ShopExpenseAdmin(admin.ModelAdmin):
     search_fields = ("description", "recorded_by__username")
     date_hierarchy = "expense_date"
     readonly_fields = ("created_at",)
+
+
+@admin.register(ShopDailyCash)
+class ShopDailyCashAdmin(admin.ModelAdmin):
+    """Per-day M-Pesa and bill figures for a shop's cash sheet."""
+
+    list_display = ("cash_date", "shop", "mpesa", "bill_out", "bill_paid", "recorded_by")
+    list_filter = ("shop", "cash_date")
+    date_hierarchy = "cash_date"
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(ShopDailyProfit)
