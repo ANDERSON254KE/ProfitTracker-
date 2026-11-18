@@ -1,4 +1,5 @@
 {
+  "buildCommand": "python manage.py migrate --noinput",
   "builds": [
     {
       "src": "profit_tracker_pro/wsgi.py",
