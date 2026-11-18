@@ -548,6 +548,27 @@ class ShopDetailViewTests(BaseDataTestCase):
         )
         self.assertFalse(ShopDailyCash.objects.exists())
 
+    def test_daily_sheet_shows_the_selected_date_only(self):
+        """?date= picks the day whose product lines and totals are shown."""
+        old_day = timezone.localdate() - timedelta(days=3)
+        self.client.force_login(self.owner)
+        page = self.client.get(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"date": old_day.isoformat()},
+        )
+        self.assertEqual(page.context["selected_date"], old_day)
+        self.assertFalse(page.context["is_today"])
+        lines = page.context["day_sales"]
+        self.assertEqual([line.product_id for line in lines], [self.gilbeys.pk])
+        self.assertEqual(page.context["day_totals"]["revenue"], Decimal("550.00"))
+
+        today_page = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        self.assertEqual(
+            [line.product_id for line in today_page.context["day_sales"]],
+            [self.blue_ice.pk],
+        )
+        self.assertEqual(today_page.context["day_totals"]["revenue"], Decimal("800.00"))
+
     def test_most_sold_products_are_ranked_by_units(self):
         self.client.force_login(self.owner)
         response = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))

@@ -2143,12 +2143,14 @@ def _shop_report_data(shop):
 
 
 class ShopDetailView(OwnerRequiredMixin, DetailView):
-    """One shop's full report: KPIs, most sold products, dated profits.
+    """One shop's full report: KPIs, a dated daily sheet, dated profits.
 
-    Reached from the owner dashboard's shop cards. The page also carries an
-    in-shop comparison: ``?compare=<pk>&compare=<pk>`` (up to four products
-    the owner picks) shows those products side by side -- all-time totals
-    plus a daily profit chart -- within this shop only.
+    Reached from the owner dashboard's shop cards. ``?date=YYYY-MM-DD`` picks
+    the day whose sheet is shown (today by default); that day's products,
+    staff, expenses and cash figures are all scoped to it. The page also
+    carries an in-shop comparison: ``?compare=<pk>&compare=<pk>`` (up to four
+    products the owner picks) shows those products side by side -- all-time
+    totals plus a daily profit chart -- within this shop only.
     """
 
     model = Shop
@@ -2196,6 +2198,32 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
         context["page_obj"] = page
         context["day_rows"] = page.object_list
         context["is_paginated"] = paginator.num_pages > 1
+
+        # --- The shop's daily sheet for one date (today unless ?date= given) ---
+        selected_date = _parse_date(self.request.GET.get("date")) or today
+        day_sales = list(sales.filter(sale_date=selected_date).select_related("product"))
+        rank = price_list_rank()
+        day_sales.sort(
+            key=lambda sale: (
+                rank.get((sale.product.name, sale.product.category), len(rank)),
+                sale.product.name,
+            )
+        )
+        day_totals = sales.filter(sale_date=selected_date).aggregate(
+            units=Sum("units_sold"), revenue=Sum("total_revenue"), profit=Sum("profit")
+        )
+        context["selected_date"] = selected_date
+        context["is_today"] = selected_date == today
+        context["day_sales"] = day_sales
+        context["day_totals"] = {
+            "units": _money(day_totals["units"]),
+            "revenue": _money(day_totals["revenue"]),
+            "profit": _money(day_totals["profit"]),
+        }
+        context["prev_date"] = selected_date - timedelta(days=1)
+        context["next_date"] = (
+            selected_date + timedelta(days=1) if selected_date < today else None
+        )
 
         # The shop's price card feeds the comparison picker.
         context["shop_products"] = list(
@@ -2275,27 +2303,29 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
             context["comparison_data"] = []
             context["comparison_chart"] = None
 
-        # --- Today's cash sheet: M-Pesa, bills and the balance carried over ---
+        # --- The cash sheet for the selected day: M-Pesa, bills, balance ---
         cash_record = ShopDailyCash.objects.filter(
-            shop=shop, cash_date=today
+            shop=shop, cash_date=selected_date
         ).first()
-        today_expenses = list(
-            ShopExpense.objects.filter(shop=shop, expense_date=today).order_by("created_at")
+        day_expenses = list(
+            ShopExpense.objects.filter(shop=shop, expense_date=selected_date).order_by(
+                "created_at"
+            )
         )
         expense_today = sum(
-            (expense.amount for expense in today_expenses), Decimal("0.00")
+            (expense.amount for expense in day_expenses), Decimal("0.00")
         )
         mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
         bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
         bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
 
-        # Total sales come from the products recorded on the sheet today. The
+        # Total sales come from the products recorded on the sheet that day. The
         # M-Pesa figure splits off its share, the rest is cash, and the day's
         # expenses and bills come out of what is left.
-        total_sales = context["today_revenue"]
+        total_sales = context["day_totals"]["revenue"]
         cash = total_sales - mpesa
         context["cash_form"] = ShopDailyCashForm(instance=cash_record)
-        context["today_expenses"] = today_expenses
+        context["today_expenses"] = day_expenses
         context["cash_summary"] = {
             "total_sales": total_sales,
             "mpesa": mpesa,
@@ -2313,13 +2343,14 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
         return context
 
     def post(self, request, *args, **kwargs):
-        """Save today's M-Pesa and bill figures, then return to the report."""
+        """Save the M-Pesa and bill figures for the named day (today if none)."""
         self.object = self.get_object()
+        day = _parse_date(request.POST.get("date")) or timezone.localdate()
         form = ShopDailyCashForm(request.POST)
         if form.is_valid():
             ShopDailyCash.objects.update_or_create(
                 shop=self.object,
-                cash_date=timezone.localdate(),
+                cash_date=day,
                 defaults={
                     "mpesa": form.cleaned_data["mpesa"] or Decimal("0.00"),
                     "bill_out": form.cleaned_data["bill_out"] or Decimal("0.00"),
@@ -2328,7 +2359,7 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
                 },
             )
             messages.success(
-                request, f"Today's cash sheet saved for {self.object.name}."
+                request, f"Cash sheet saved for {self.object.name} on {day}."
             )
         else:
             errors = " ".join(
@@ -2337,7 +2368,9 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
                 for error in field_errors
             )
             messages.error(request, f"Cash sheet not saved. {errors}")
-        return redirect("shop_detail", pk=self.object.pk)
+        return redirect(
+            f"{reverse('shop_detail', args=[self.object.pk])}?date={day.isoformat()}"
+        )
 
 
 class ShopReportCSVView(OwnerRequiredMixin, View):
