@@ -2122,3 +2122,51 @@ class SingleRowPerDayTests(BaseDataTestCase):
         self.assertEqual(sale.pk, legacy.pk)
         self.assertEqual(sale.units_sold, Decimal("8.00"))
         self.assertTrue(sale.is_profit_sheet_entry)
+
+
+class MergeDuplicateSalesCommandTests(BaseDataTestCase):
+    """The cleanup command folds an older sale into the day's manual figure."""
+
+    def setUp(self):
+        super().setUp()
+        self.day = timezone.localdate()
+        self.older = DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=self.day,
+            units_sold=Decimal("3"), recorded_by=self.fig_manager,
+        )
+        self.manual = DailySale.objects.create(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=self.day,
+            units_sold=Decimal("8"), is_profit_sheet_entry=True,
+            recorded_by=self.fig_manager,
+        )
+        ShopDailyProfit.objects.create(
+            shop=self.fig_tree, profit_date=self.day,
+            sales_revenue=Decimal("5500.00"), product_cost=Decimal("3600.00"),
+            gross_profit=Decimal("1350.00"), expense_total=Decimal("0.00"),
+            net_profit=Decimal("1350.00"), calculated_by=self.fig_manager,
+        )
+
+    def test_dry_run_deletes_nothing(self):
+        call_command("merge_duplicate_sales", stdout=StringIO())
+
+        self.assertEqual(
+            DailySale.objects.filter(
+                shop=self.fig_tree, product=self.gilbeys, sale_date=self.day
+            ).count(),
+            2,
+        )
+
+    def test_apply_keeps_the_manual_entry_and_recalculates_the_day(self):
+        call_command("merge_duplicate_sales", "--apply", stdout=StringIO())
+
+        rows = DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=self.day
+        )
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.get().pk, self.manual.pk)
+        self.assertEqual(rows.get().units_sold, Decimal("8.00"))
+
+        saved = ShopDailyProfit.objects.get(shop=self.fig_tree, profit_date=self.day)
+        # 8 units x (550 - 450) = 800, no longer 1350 from 11 units.
+        self.assertEqual(saved.gross_profit, Decimal("800.00"))
+        self.assertEqual(saved.sales_revenue, Decimal("4400.00"))
