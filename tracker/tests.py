@@ -1999,3 +1999,28 @@ class ManualStockAdditionTests(BaseDataTestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertFalse(StockAddition.objects.exists())
+
+    def test_totals_sum_the_rows_shown(self):
+        self._add()
+        DailySale.objects.create(
+            shop=self.empire, product=self.gilbeys, sale_date=self.added_day,
+            units_sold=Decimal("5"), recorded_by=self.empire_manager,
+        )
+        self.client.force_login(self.owner)
+
+        page = self.client.get(
+            reverse("product_report"),
+            {
+                "stock_start_date": self.added_day.isoformat(),
+                "stock_end_date": self.added_day.isoformat(),
+            },
+        )
+
+        totals = page.context["stock_totals"]
+        self.assertEqual(totals["added"], Decimal("20.00"))
+        self.assertEqual(totals["sold"], Decimal("5.00"))
+        self.assertEqual(totals["remaining"], Decimal("15.00"))
+        self.assertEqual(totals["revenue"], Decimal("3000.00"))
+        self.assertEqual(totals["profit"], Decimal("750.00"))
+        self.assertEqual(totals["unit_profit"], Decimal("150.00"))
+        self.assertContains(page, "Totals")

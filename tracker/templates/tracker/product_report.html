@@ -222,10 +222,23 @@
                 </tr>
                 {% endfor %}
             </tbody>
+            {% if stock_rows %}
+            <tfoot class="border-t-2 border-slate-300 bg-slate-50">
+                <tr>
+                    <td colspan="3" class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Totals<span class="block font-normal normal-case text-slate-400">{{ stock_rows|length }} row{{ stock_rows|length|pluralize }}, sum of the rows above</span></td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ stock_totals.added|units }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ stock_totals.sold|units }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ stock_totals.remaining|units }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ stock_totals.revenue|ksh }}</td>
+                    <td class="px-5 py-3 text-right font-semibold {% if stock_totals.profit < 0 %}text-rose-600{% elif stock_totals.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ stock_totals.profit|ksh }}</td>
+                    <td class="px-5 py-3 text-right font-semibold text-slate-900">{{ stock_totals.unit_profit|ksh }}</td>
+                </tr>
+            </tfoot>
+            {% endif %}
         </table>
     </div>
     <p class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">
-        "Sold since" and "Profit since" count every sale of that product in that shop from the addition date to today, including stock that was already on the shelf. Rows for the same product and shop therefore overlap and must not be added together. Rows added by hand are marked "Manual" and can be removed.
+        "Sold since" and "Profit since" count every sale of that product in that shop from the addition date to today, including stock that was already on the shelf. Rows for the same product and shop therefore overlap, and the totals line adds the rows as shown — a product added twice in the range has its sales counted once per addition. Profit / Unit in the totals is total profit divided by total units sold. Rows added by hand are marked "Manual" and can be removed.
     </p>
 </section>
 

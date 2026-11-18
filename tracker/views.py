@@ -1866,9 +1866,25 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
                 stock_shop_ids = {selected_stock_shop.pk}
             except (Shop.DoesNotExist, ValueError, TypeError):
                 stock_shop_id = ""
-        context["stock_rows"] = _stock_batch_profit_rows(
+        stock_rows = _stock_batch_profit_rows(
             stock_start, stock_end, shop_ids=stock_shop_ids
         )
+        context["stock_rows"] = stock_rows
+        stock_totals = {
+            "added": sum((row["added"] for row in stock_rows), Decimal("0.00")),
+            "sold": sum((row["sold"] for row in stock_rows), Decimal("0.00")),
+            "remaining": sum(
+                (row["remaining"] for row in stock_rows), Decimal("0.00")
+            ),
+            "revenue": sum((row["revenue"] for row in stock_rows), Decimal("0.00")),
+            "profit": sum((row["profit"] for row in stock_rows), Decimal("0.00")),
+        }
+        stock_totals["unit_profit"] = (
+            stock_totals["profit"] / stock_totals["sold"]
+            if stock_totals["sold"]
+            else Decimal("0.00")
+        )
+        context["stock_totals"] = stock_totals
         context["stock_start_date"] = stock_start.isoformat()
         context["stock_end_date"] = stock_end.isoformat()
         context["stock_today"] = today.isoformat()
