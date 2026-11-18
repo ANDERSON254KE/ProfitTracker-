@@ -2158,7 +2158,7 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
     context_object_name = "shop"
 
     #: Upper bound on products the in-shop comparison accepts.
-    MAX_COMPARE = 4
+    MAX_COMPARE = 5
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -2232,7 +2232,9 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
             .order_by("product__name", "product__category")
         )
 
-        # --- In-shop product comparison (up to 4 products) ---
+        # --- In-shop product comparison (up to 5 products, on one chosen day) ---
+        compare_date = _parse_date(self.request.GET.get("compare_date")) or today
+        context["compare_date"] = compare_date
         compare_ids = []
         for raw in self.request.GET.getlist("compare"):
             try:
@@ -2248,8 +2250,10 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
             compare_ids = [pk for pk in compare_ids if pk in available]
             context["compare_ids"] = compare_ids
         if compare_ids:
+            # Figures are for the chosen day, not all time, so the owner can
+            # compare products on today or any past date.
             compare_rows = list(
-                sales.filter(product_id__in=compare_ids)
+                sales.filter(product_id__in=compare_ids, sale_date=compare_date)
                 .values("product_id", "product__name", "product__category")
                 .annotate(
                     units=Sum("units_sold"),
@@ -2259,28 +2263,37 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
             )
             by_id = {row["product_id"]: row for row in compare_rows}
 
-            chart_start = today - timedelta(days=OWNER_CHART_DAYS - 1)
+            chart_start = compare_date - timedelta(days=OWNER_CHART_DAYS - 1)
             chart_days = [chart_start + timedelta(days=i) for i in range(OWNER_CHART_DAYS)]
             per_day = {
                 (row["product_id"], row["sale_date"]): _money(row["profit"])
-                for row in sales.filter(product_id__in=compare_ids, sale_date__gte=chart_start)
+                for row in sales.filter(
+                    product_id__in=compare_ids,
+                    sale_date__gte=chart_start,
+                    sale_date__lte=compare_date,
+                )
                 .values("product_id", "sale_date")
                 .annotate(profit=Sum("profit"))
             }
 
+            # Look up the product's name/category from the shop's price card, so
+            # a date with no sales still lists the product with zero figures.
+            name_by_id = {
+                sp.product_id: (sp.product.name, sp.product.category)
+                for sp in context["shop_products"]
+            }
             products = []
             for pk in compare_ids:
-                row = by_id.get(pk)
-                if row is None:
-                    continue
+                row = by_id.get(pk, {})
+                name, category = name_by_id.get(pk, ("", ""))
                 products.append(
                     {
                         "product_id": pk,
-                        "name": row["product__name"],
-                        "category": row["product__category"],
-                        "units": _money(row["units"]),
-                        "revenue": _money(row["revenue"]),
-                        "profit": _money(row["profit"]),
+                        "name": name,
+                        "category": category,
+                        "units": _money(row.get("units")),
+                        "revenue": _money(row.get("revenue")),
+                        "profit": _money(row.get("profit")),
                     }
                 )
             context["comparison_data"] = products

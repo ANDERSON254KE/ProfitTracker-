@@ -508,7 +508,7 @@ class ShopDetailViewTests(BaseDataTestCase):
         self.assertEqual(today_row["staff"], "figtree")
         self.assertEqual(today_row["expenses"], Decimal("50.00"))
         self.assertEqual(today_row["net"], Decimal("150.00"))   # 200 profit - 50
-        self.assertContains(response, "On Duty")
+        self.assertContains(response, "Balance carried forward")
 
     def test_today_cash_sheet_saves_and_derives_cash_and_balance(self):
         """M-Pesa is typed; cash and the carried balance are worked out."""

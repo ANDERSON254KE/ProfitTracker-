@@ -30,27 +30,24 @@
 </div>
 
 {# ---- KPI cards ---- #}
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    <div class="rounded-xl bg-white p-5 shadow">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Today's Profit</p>
-        <p class="mt-2 text-3xl font-bold {% if today_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-            {{ today_profit|ksh }}
-        </p>
-        <p class="mt-1 text-xs text-slate-400">{{ today_units|units }} unit(s) · {{ today_revenue|ksh }}</p>
+<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="flex items-center justify-between gap-4 rounded-lg border-l-4 border-emerald-500 bg-white px-6 py-3 shadow-sm">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Today's Profit</p>
+            <p class="text-xl font-bold {% if today_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                {{ today_profit|ksh }}
+            </p>
+        </div>
+        <p class="text-xs text-slate-400">{{ today_units|units }} unit(s) · {{ today_revenue|ksh }}</p>
     </div>
     <a href="{% url 'shop_profit_sheet' shop.pk %}"
-       class="flex flex-col justify-between rounded-xl bg-indigo-600 p-5 shadow transition hover:bg-indigo-500">
-        <p class="text-xs font-semibold uppercase tracking-wide text-indigo-100">Daily sales</p>
-        <p class="mt-2 text-2xl font-bold text-white">Open today's sheet →</p>
-        <p class="mt-1 text-xs text-indigo-100">Units sold, expenses and cash for {{ today|date:"d M Y" }}</p>
+       class="flex items-center justify-between gap-4 rounded-lg border-l-4 border-indigo-500 bg-indigo-600 px-6 py-3 shadow-sm transition hover:bg-indigo-500">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-indigo-100">Daily sales</p>
+            <p class="text-lg font-bold text-white">Open today's sheet →</p>
+        </div>
+        <p class="text-xs text-indigo-100">Units sold, expenses and cash for {{ today|date:"d M Y" }}</p>
     </a>
-    <div class="rounded-xl bg-white p-5 shadow">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Today's Profit</p>
-        <p class="mt-2 text-3xl font-bold {% if today_profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-            {{ today_profit|ksh }}
-        </p>
-        <p class="mt-1 text-xs text-slate-400">{{ today_units|units }} unit(s) · {{ today_revenue|ksh }}</p>
-    </div>
 </div>
 
 {# ---- Today's sheet: M-Pesa, cash, bills and the balance carried forward ---- #}
@@ -220,12 +217,26 @@
 <div class="mt-6 rounded-xl bg-white shadow">
     <div class="border-b border-slate-200 px-5 py-4">
         <h2 class="text-base font-semibold text-slate-900">Compare products in this shop</h2>
-        <p class="text-xs text-slate-500">Tick up to {{ max_compare }} products to see them side by side</p>
+        <p class="text-xs text-slate-500">Tick up to {{ max_compare }} products and pick a day to compare them on</p>
     </div>
     <form method="get" class="p-5">
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="flex flex-wrap items-end gap-3">
+            <div class="flex-1 min-w-[12rem]">
+                <label for="compareSearch" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Find products</label>
+                <input id="compareSearch" type="search" placeholder="Search by name or category..." autocomplete="off"
+                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="compareDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Compare on</label>
+                <input id="compareDate" name="compare_date" type="date" value="{{ compare_date|date:"Y-m-d" }}"
+                       max="{{ today|date:"Y-m-d" }}"
+                       class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3" id="compare-products">
             {% for sp in shop_products %}
-            <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:border-indigo-300">
+            <label class="compare-product flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:border-indigo-300"
+                   data-search="{{ sp.product.name|lower }} {{ sp.product.category|lower }}">
                 <input type="checkbox" name="compare" value="{{ sp.product_id }}"
                        {% if sp.product_id in compare_ids %}checked{% endif %}
                        class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
@@ -246,6 +257,7 @@
 
     {% if comparison_data %}
     <div class="border-t border-slate-200 p-5">
+        <p class="mb-3 text-xs text-slate-500">Figures for {{ compare_date|date:"D d M Y" }}{% if compare_date == today %} (today){% endif %}</p>
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
                 <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
@@ -273,87 +285,33 @@
             </table>
         </div>
         <div class="mt-6">
-            <h3 class="mb-2 text-sm font-semibold text-slate-900">Daily profit — last 30 days</h3>
+            <h3 class="mb-2 text-sm font-semibold text-slate-900">Daily profit — 30 days to {{ compare_date|date:"d M Y" }}</h3>
             <div class="h-72"><canvas id="chart-shop-compare"></canvas></div>
         </div>
     </div>
     {% endif %}
 </div>
 
-{# ---- Dated profits ---- #}
-<div class="mt-6 rounded-xl bg-white shadow">
-    <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Every trading day</h2>
-        <p class="text-xs text-slate-500">Sales, units, profit, expenses and who was on duty — newest first</p>
-    </div>
-    <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-slate-200 text-sm">
-            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                    <th class="px-5 py-3 text-left font-semibold">Date</th>
-                    <th class="px-5 py-3 text-right font-semibold">Units Sold</th>
-                    <th class="px-5 py-3 text-right font-semibold">Sales</th>
-                    <th class="px-5 py-3 text-right font-semibold">Gross Profit</th>
-                    <th class="px-5 py-3 text-right font-semibold">Expenses</th>
-                    <th class="px-5 py-3 text-right font-semibold">Net Profit</th>
-                    <th class="px-5 py-3 text-left font-semibold">On Duty</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-                {% for row in day_rows %}
-                <tr class="{% if row.sale_date == today %}bg-indigo-50{% else %}hover:bg-slate-50{% endif %}">
-                    <td class="whitespace-nowrap px-5 py-3 font-medium text-slate-900">
-                        <a href="?date={{ row.sale_date|date:"Y-m-d" }}" class="hover:text-indigo-600 hover:underline">
-                            {{ row.sale_date|date:"D d M Y" }}
-                        </a>
-                        {% if row.sale_date == today %}<span class="ml-1 text-xs text-indigo-600">today</span>{% endif %}
-                    </td>
-                    <td class="px-5 py-3 text-right text-slate-700">{{ row.units|units }}</td>
-                    <td class="px-5 py-3 text-right text-slate-700">{{ row.revenue|ksh }}</td>
-                    <td class="px-5 py-3 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
-                        {{ row.profit|ksh }}
-                    </td>
-                    <td class="px-5 py-3 text-right {% if row.expenses %}text-slate-700{% else %}text-slate-300{% endif %}">
-                        {% if row.expenses %}{{ row.expenses|ksh }}{% else %}—{% endif %}
-                    </td>
-                    <td class="px-5 py-3 text-right font-semibold {% if row.net < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
-                        {{ row.net|ksh }}
-                    </td>
-                    <td class="px-5 py-3 text-left text-xs text-slate-600">
-                        {{ row.staff|default:"—" }}
-                    </td>
-                </tr>
-                {% empty %}
-                <tr>
-                    <td colspan="7" class="px-5 py-6 text-center text-slate-500">No trading days recorded yet.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% if is_paginated %}
-    <div class="flex items-center justify-between border-t border-slate-200 px-5 py-3 text-sm">
-        <p class="text-slate-500">
-            Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
-            · {{ page_obj.paginator.count }} day(s)
-        </p>
-        <div class="flex gap-2">
-            {% if page_obj.has_previous %}
-            <a href="?compare={{ compare_ids|join:',' }}&page={{ page_obj.previous_page_number }}"
-               class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">← Newer</a>
-            {% endif %}
-            {% if page_obj.has_next %}
-            <a href="?compare={{ compare_ids|join:',' }}&page={{ page_obj.next_page_number }}"
-               class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium hover:bg-slate-50">Older →</a>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
-</div>
+
 
 {% if comparison_chart %}
 {{ comparison_chart|json_script:"shop-compare-chart" }}
 {% endif %}
+
+<script>
+(function () {
+    var input = document.getElementById('compareSearch');
+    var box = document.getElementById('compare-products');
+    if (!input || !box) return;
+    input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        box.querySelectorAll('.compare-product').forEach(function (label) {
+            var haystack = label.getAttribute('data-search') || '';
+            label.classList.toggle('hidden', q !== '' && haystack.indexOf(q) === -1);
+        });
+    });
+})();
+</script>
 {% endblock %}
 
 {% block scripts %}
