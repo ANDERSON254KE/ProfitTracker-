@@ -76,6 +76,11 @@ urlpatterns = [
         name="product_report_csv",
     ),
     path(
+        "profit-sheets/export/",
+        views.ShopProfitCSVView.as_view(),
+        name="profit_sheet_csv",
+    ),
+    path(
         "products/report/profit-sheet.xlsx",
         views.AllShopsProfitWorkbookView.as_view(),
         name="all_shops_profit_workbook",

@@ -1872,7 +1872,7 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             export_params["report_shop"] = selected_shop_id
         if product_query:
             export_params["product"] = product_query
-        context["csv_export_url"] = f"{reverse('product_report_csv')}?{urlencode(export_params)}"
+        context["csv_export_url"] = f"{reverse('profit_sheet_csv')}?{urlencode(export_params)}"
         context["profit_start_date"] = start_date.isoformat()
         context["profit_end_date"] = end_date.isoformat()
         context["profit_report"] = profit_report
@@ -1934,6 +1934,42 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             ),
         )
         return context
+
+
+class ShopProfitCSVView(OwnerRequiredMixin, View):
+    """Download a slim profit sheet: one row per shop with its net profit.
+
+    Covers the selected date range (and, when ``report_shop`` is given, just
+    that shop). Only the shop name and its profit amount are exported.
+    """
+
+    def get(self, request, *args, **kwargs):
+        start_date, end_date = _all_shops_profit_date_range(request)
+        selected_shop_id = request.GET.get("report_shop") or ""
+        report = _all_shops_profit_report(start_date, end_date)
+        rows = report["summary_rows"]
+        if selected_shop_id:
+            try:
+                selected_id = int(selected_shop_id)
+                rows = [row for row in rows if row["shop"].pk == selected_id]
+            except (TypeError, ValueError):
+                pass
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["From", start_date.isoformat(), "To", end_date.isoformat()])
+        writer.writerow(["Shop", "Profit"])
+        total = Decimal("0.00")
+        for row in rows:
+            writer.writerow([row["shop"].name, f"{row['net']:.2f}"])
+            total += row["net"]
+        writer.writerow(["All shops", f"{total:.2f}"])
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="profit_sheet_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"'
+        )
+        return response
 
 
 class ProductReportCSVView(OwnerRequiredMixin, View):
