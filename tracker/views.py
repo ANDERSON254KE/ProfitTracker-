@@ -1034,6 +1034,8 @@ class ShopPricingView(OwnerRequiredMixin, View):
         for sp in shop_products:
             grouped.setdefault(sp.shop, []).append(sp)
 
+        products = MasterProduct.objects.all().order_by("name", "category")
+
         return render(
             request,
             self.template_name,
@@ -1041,12 +1043,55 @@ class ShopPricingView(OwnerRequiredMixin, View):
                 "grouped_products": grouped,
                 "shops": Shop.objects.all(),
                 "current_shop": shop,
+                "products": products,
             },
         )
 
     def post(self, request, *args, **kwargs):
         """Apply the submitted prices, then redirect back with a summary."""
         shop = self._current_shop(request)
+
+        # --- Product catalog edits (common sheet): add / rename items ---
+        product_updates = 0
+        # Add a new item
+        new_name = (request.POST.get("new_product_name") or "").strip()
+        new_category = (request.POST.get("new_product_category") or "").strip()
+        if new_name:
+            try:
+                MasterProduct.objects.create(name=new_name, category=new_category)
+                messages.success(request, f"Added product '{new_name}'.")
+                product_updates += 1
+            except Exception:
+                messages.error(
+                    request,
+                    f"Could not add '{new_name}' (maybe a duplicate name+category).",
+                )
+        # Rename / change description of existing items
+        for mp in MasterProduct.objects.all():
+            prefix = f"master-{mp.pk}-"
+            name_raw = request.POST.get(prefix + "name")
+            if name_raw is None:
+                continue
+            name_raw = name_raw.strip()
+            cat_raw = (request.POST.get(prefix + "category") or "").strip()
+            if not name_raw:
+                messages.error(request, f"Product #{mp.pk}: name cannot be empty.")
+                continue
+            if name_raw == mp.name and cat_raw == mp.category:
+                continue
+            try:
+                mp.name = name_raw
+                mp.category = cat_raw
+                mp.save(update_fields=["name", "category"])
+                product_updates += 1
+            except Exception:
+                messages.error(
+                    request,
+                    f"Could not update '{mp.name}' (maybe a duplicate name+category).",
+                )
+        if product_updates:
+            messages.success(request, f"Saved {product_updates} product change(s).")
+
         updates = 0
         rows = ShopProduct.objects.select_related("shop", "product").all()
         if shop is not None:
