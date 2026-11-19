@@ -2507,12 +2507,22 @@ def _icon_png(size):
 _ICON_CACHE = {}
 
 
+import os as _os
+
+
 def pwa_icon(request, size):
     size = int(size)
     if size not in (192, 512, 180, 32, 16):
         size = 192
     if size not in _ICON_CACHE:
-        data = _icon_png(size)
+        # Prefer committed icon file (works without Pillow in production).
+        icon_path = _os.path.join(_os.path.dirname(__file__), "icons", f"icon-{size}.png")
+        data = None
+        if _os.path.exists(icon_path):
+            with open(icon_path, "rb") as f:
+                data = f.read()
+        if data is None:
+            data = _icon_png(size)
         if data is None:
             return HttpResponse(status=404)
         _ICON_CACHE[size] = data
