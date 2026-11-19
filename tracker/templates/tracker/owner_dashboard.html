@@ -15,6 +15,49 @@
     </a>
 </div>
 
+{# ---- Shop cards ---- #}
+<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {% for row in shop_rows %}
+    <a href="{% url 'shop_detail' row.shop.pk %}"
+       class="group rounded-xl bg-white p-5 shadow transition hover:-translate-y-0.5 hover:shadow-lg">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-base font-semibold text-slate-900 group-hover:text-indigo-600">{{ row.shop.name }}</h2>
+                <p class="text-xs text-slate-500">{{ row.shop.location|default:"—" }}</p>
+            </div>
+            <span class="rounded-full {% if row.profit < 0 %}bg-rose-50 text-rose-600{% else %}bg-emerald-50 text-emerald-600{% endif %} px-3 py-1 text-xs font-semibold">
+                All time {{ row.profit|ksh }}
+            </span>
+        </div>
+        <div class="mt-4 grid grid-cols-3 gap-2 text-center">
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Today</p>
+                <p class="mt-1 text-sm font-bold {% if row.today_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                    {{ row.today_profit|ksh }}
+                </p>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">7 days</p>
+                <p class="mt-1 text-sm font-bold {% if row.week_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
+                    {{ row.week_profit|ksh }}
+                </p>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-2">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Units</p>
+                <p class="mt-1 text-sm font-bold text-slate-900">{{ row.units|units }}</p>
+            </div>
+        </div>
+        <p class="mt-3 text-right text-xs font-medium text-indigo-600 opacity-0 transition group-hover:opacity-100">
+            View shop report →
+        </p>
+    </a>
+    {% empty %}
+    <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
+        No shops yet. Create them in the admin to start tracking.
+    </div>
+    {% endfor %}
+</div>
+
 {# ---- Summary cards ---- #}
 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
     <div class="rounded-xl bg-white p-5 shadow">
@@ -61,49 +104,6 @@
         <p class="text-xs text-slate-500">Across every shop</p>
         <div class="mt-4 h-96"><canvas id="chart-top-products"></canvas></div>
     </div>
-</div>
-
-{# ---- Shop cards ---- #}
-<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    {% for row in shop_rows %}
-    <a href="{% url 'shop_detail' row.shop.pk %}"
-       class="group rounded-xl bg-white p-5 shadow transition hover:-translate-y-0.5 hover:shadow-lg">
-        <div class="flex items-start justify-between gap-3">
-            <div>
-                <h2 class="text-base font-semibold text-slate-900 group-hover:text-indigo-600">{{ row.shop.name }}</h2>
-                <p class="text-xs text-slate-500">{{ row.shop.location|default:"—" }}</p>
-            </div>
-            <span class="rounded-full {% if row.profit < 0 %}bg-rose-50 text-rose-600{% else %}bg-emerald-50 text-emerald-600{% endif %} px-3 py-1 text-xs font-semibold">
-                All time {{ row.profit|ksh }}
-            </span>
-        </div>
-        <div class="mt-4 grid grid-cols-3 gap-2 text-center">
-            <div class="rounded-lg bg-slate-50 p-2">
-                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Today</p>
-                <p class="mt-1 text-sm font-bold {% if row.today_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
-                    {{ row.today_profit|ksh }}
-                </p>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-2">
-                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">7 days</p>
-                <p class="mt-1 text-sm font-bold {% if row.week_profit < 0 %}text-rose-600{% else %}text-slate-900{% endif %}">
-                    {{ row.week_profit|ksh }}
-                </p>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-2">
-                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Units</p>
-                <p class="mt-1 text-sm font-bold text-slate-900">{{ row.units|units }}</p>
-            </div>
-        </div>
-        <p class="mt-3 text-right text-xs font-medium text-indigo-600 opacity-0 transition group-hover:opacity-100">
-            View shop report →
-        </p>
-    </a>
-    {% empty %}
-    <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
-        No shops yet. Create them in the admin to start tracking.
-    </div>
-    {% endfor %}
 </div>
 
 {# ---- Last 7 days ---- #}
