@@ -1413,6 +1413,24 @@ class DailySalesSheetTests(BaseDataTestCase):
         self.assertEqual(blue_ice.units_sold, Decimal("10.00"))
         self.assertEqual(blue_ice.profit, Decimal("500.00"))
 
+    def test_cash_section_saves_mpesa_and_bills(self):
+        """One submit also records the day's M-Pesa and bill figures."""
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="10", closing="6")
+        payload.update({"mpesa": "300", "bill_out": "100", "bill_paid": "50"})
+        self.client.post(reverse(self.SHEET), payload)
+
+        cash = ShopDailyCash.objects.get(shop=self.fig_tree)
+        self.assertEqual(cash.mpesa, Decimal("300.00"))
+        self.assertEqual(cash.bill_out, Decimal("100.00"))
+        self.assertEqual(cash.bill_paid, Decimal("50.00"))
+
+        page = self.client.get(reverse(self.SHEET))
+        # Total sales is the day's product revenue; cash is what is left once
+        # the M-Pesa share is taken out.
+        self.assertEqual(page.context["cash_total_sales"], Decimal("2200.00"))
+        self.assertEqual(page.context["cash_cash"], Decimal("1900.00"))
+
     def test_total_stock_is_derived_when_it_is_not_typed(self):
         """The sheet only asks for opening, additional and closing stock."""
         self.client.force_login(self.fig_manager)

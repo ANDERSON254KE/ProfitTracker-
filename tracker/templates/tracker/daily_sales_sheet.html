@@ -140,6 +140,46 @@
             No products match your search.
         </div>
 
+        {# Cash side of the same day: total sales and cash are derived. #}
+        <div class="border-t border-zinc-200 bg-white px-3 py-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-1">
+                <p class="text-[10px] font-medium uppercase tracking-wide text-zinc-500">Cash reconciliation</p>
+                <p class="text-[10px] text-zinc-400">Total sales and cash are worked out for you</p>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Total sales</span>
+                    <input id="cash-total-sales" type="text" readonly tabindex="-1"
+                           value="{{ cash_total_sales|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">M-Pesa</span>
+                    <input id="cash-mpesa" name="mpesa" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_mpesa }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Cash</span>
+                    <input id="cash-cash" type="text" readonly tabindex="-1"
+                           value="{{ cash_cash|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Bill out</span>
+                    <input id="cash-bill-out" name="bill_out" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_bill_out }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Bill paid</span>
+                    <input id="cash-bill-paid" name="bill_paid" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_bill_paid }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+            </div>
+        </div>
+
         <div class="flex flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <p class="text-xs text-zinc-600 sm:text-sm">
                 <span class="font-medium text-zinc-900"><span id="new-line-count">0</span> product(s)</span>
@@ -240,6 +280,22 @@
             set("new-line-count", String(newCount));
             set("new-units", quantity.format(newUnits));
             set("new-amount", "KSh " + money.format(newAmount));
+            updateCash(newAmount);
+        }
+
+        const mpesaInput = document.getElementById("cash-mpesa");
+
+        // Total sales come from the product rows; cash is whatever the day took
+        // after the M-Pesa share is taken out. Both stay read-only.
+        function updateCash(total) {
+            const totalEl = document.getElementById("cash-total-sales");
+            const cashEl = document.getElementById("cash-cash");
+            if (!totalEl || !cashEl) return;
+            const mpesa = mpesaInput && mpesaInput.value !== ""
+                ? (parseFloat(mpesaInput.value) || 0)
+                : 0;
+            totalEl.value = "KSh " + money.format(total);
+            cashEl.value = "KSh " + money.format(total - mpesa);
         }
 
         function setChip(chip, on) {
@@ -282,6 +338,11 @@
             input.addEventListener("input", update);
             input.addEventListener("change", update);
         });
+
+        if (mpesaInput) {
+            mpesaInput.addEventListener("input", update);
+            mpesaInput.addEventListener("change", update);
+        }
 
         applyFilter();
         update();

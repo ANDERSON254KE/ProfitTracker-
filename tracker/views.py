@@ -512,6 +512,12 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             units=Sum("units_sold"),
         )
 
+        # Cash side of the same day: the manager enters M-Pesa and the bills;
+        # total sales and the cash left over are derived here.
+        cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=today).first()
+        mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
+        total_sales = _money(day["revenue"])
+
         # Filter chips, in sheet order (250ml ... soda) with a row count each.
         section_counts = {}
         for row in rows:
@@ -532,6 +538,12 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             "day_profit": _money(day["profit"]),
             "day_units": _money(day["units"]),
             "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
+            "cash_record": cash_record,
+            "cash_mpesa": str(mpesa) if cash_record else "",
+            "cash_bill_out": str(cash_record.bill_out) if cash_record else "",
+            "cash_bill_paid": str(cash_record.bill_paid) if cash_record else "",
+            "cash_total_sales": total_sales,
+            "cash_cash": _money(total_sales - mpesa),
         }
 
     def get(self, request, *args, **kwargs):
@@ -547,7 +559,8 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             openings=context["openings"],
             day=context["today"],
         )
-        if not form.is_valid():
+        cash_form = ShopDailyCashForm(request.POST)
+        if not form.is_valid() or not cash_form.is_valid():
             # Keep whatever the user typed so a rejected row can be fixed in place.
             for row in context["rows"]:
                 key = row["product"].pk
@@ -560,9 +573,26 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
                     raw = request.POST.get(f"{prefix}{key}")
                     if raw is not None and str(raw).strip() != "":
                         row[name] = raw
-            context["form_errors"] = form.non_field_errors()
+            errors = list(form.non_field_errors())
+            for field, field_errors in cash_form.errors.items():
+                label = field.replace("_", " ").capitalize()
+                errors.extend(f"{label}: {error}" for error in field_errors)
+            context["form_errors"] = errors
             context["form_warnings"] = form.warnings
             return self.render_to_response(context, status=400)
+
+        # Save the day's cash split alongside the stock rows so one submit
+        # records the whole sheet.
+        ShopDailyCash.objects.update_or_create(
+            shop=self.shop,
+            cash_date=context["today"],
+            defaults={
+                "mpesa": cash_form.cleaned_data["mpesa"] or Decimal("0.00"),
+                "bill_out": cash_form.cleaned_data["bill_out"] or Decimal("0.00"),
+                "bill_paid": cash_form.cleaned_data["bill_paid"] or Decimal("0.00"),
+                "recorded_by": request.user,
+            },
+        )
 
         sales = form.save(request.user)
         if sales:
@@ -573,8 +603,9 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         if not sales:
             messages.warning(
                 request,
-                "Nothing was entered. Fill in additional stock and closing stock "
-                "for the products that changed, or leave a row blank.",
+                "Cash figures saved, but no product rows were entered. Fill in "
+                "additional stock and closing stock for the products that changed, "
+                "or leave a row blank.",
             )
             return redirect("daily_sales_sheet")
 
