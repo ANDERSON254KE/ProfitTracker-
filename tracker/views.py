@@ -31,6 +31,11 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.generic import CreateView, DetailView, RedirectView, TemplateView, View
 from openpyxl import Workbook
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .forms import (
@@ -2470,3 +2475,96 @@ class ShopReportCSVView(OwnerRequiredMixin, View):
             f'attachment; filename="shop_report_{shop.name.lower().replace(" ", "_")}.csv"'
         )
         return response
+
+
+# ---------------------------------------------------------------------------
+# PWA: manifest, service worker, icons
+# ---------------------------------------------------------------------------
+
+def _icon_png(size):
+    """Generate a simple square icon with a white 'E' on indigo background."""
+    if not PIL_AVAILABLE:
+        return None
+    img = Image.new("RGB", (size, size), (79, 70, 229))  # indigo-600
+    draw = ImageDraw.Draw(img)
+    # Draw letter E
+    try:
+        font = ImageFont.truetype("arial.ttf", int(size * 0.6))
+    except Exception:
+        font = ImageFont.load_default()
+    text = "E"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    x = (size - tw) // 2 - bbox[0]
+    y = (size - th) // 2 - bbox[1]
+    draw.text((x, y), text, fill=(255, 255, 255), font=font)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+_ICON_CACHE = {}
+
+
+def pwa_icon(request, size):
+    size = int(size)
+    if size not in (192, 512, 180, 32, 16):
+        size = 192
+    if size not in _ICON_CACHE:
+        data = _icon_png(size)
+        if data is None:
+            return HttpResponse(status=404)
+        _ICON_CACHE[size] = data
+    return HttpResponse(_ICON_CACHE[size], content_type="image/png")
+
+
+def pwa_manifest(request):
+    base = request.build_absolute_uri("/").rstrip("/")
+    data = {
+        "name": "Empire",
+        "short_name": "Empire",
+        "description": "Multi-shop profit tracker",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#0f172a",
+        "theme_color": "#4f46e5",
+        "orientation": "portrait-primary",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }
+    return JsonResponse(data, content_type="application/manifest+json")
+
+
+def pwa_service_worker(request):
+    js = """
+const CACHE_NAME = 'empire-v1';
+const SHELL = ['/'];
+self.addEventListener('install', (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(SHELL)));
+  self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  event.respondWith(
+    fetch(req).then((res) => {
+      const copy = res.clone();
+      caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
+      return res;
+    }).catch(() => caches.match(req).then((r) => r || caches.match('/')))
+  );
+});
+"""
+    return HttpResponse(js.strip(), content_type="application/javascript")

@@ -17,6 +17,8 @@ from django.urls import path
 
 from . import views
 
+# PWA assets are served from the root scope so the service worker controls the whole app.
+
 # No app_name/namespace: route names stay flat ("login", "owner_dashboard")
 # so they can be used directly in settings.LOGIN_URL and template {% url %}.
 urlpatterns = [
@@ -96,4 +98,8 @@ urlpatterns = [
         views.ShopReportCSVView.as_view(),
         name="shop_report_csv",
     ),
+    # PWA
+    path("manifest.json", views.pwa_manifest, name="pwa_manifest"),
+    path("sw.js", views.pwa_service_worker, name="pwa_service_worker"),
+    path("icon-<int:size>.png", views.pwa_icon, name="pwa_icon"),
 ]
