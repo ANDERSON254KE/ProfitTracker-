@@ -1589,10 +1589,12 @@ class DailySalesSheetTests(BaseDataTestCase):
         self.assertNotContains(page, "new-profit")           # footer running total
         self.assertNotIn("data-cost", html)                  # cost stays on the server
 
-        # It is still computed and stored, and the dashboard still shows it.
+        # It is still computed and stored, but the manager dashboard is an
+        # entry point -- the sheet and its links -- not a profit report.
         self.assertEqual(DailySale.objects.get().profit, Decimal("400.00"))
         dash = self.client.get(reverse("manager_dashboard"))
-        self.assertContains(dash, "Today's Profit")
+        self.assertNotContains(dash, "Today's Profit")
+        self.assertNotContains(dash, "Total Net Profit")
 
     def test_products_without_a_cost_are_left_off_the_sheet(self):
         """No cost, no profit -- so the product is not offered at all."""

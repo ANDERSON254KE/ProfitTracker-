@@ -353,15 +353,24 @@ class DailySalesSheetForm(forms.Form):
         # was already recorded by hand (profit sheet or a legacy single sale)
         # is rewritten into today's stock row instead of gaining a second row
         # whose units would be added to the day's sales twice.
-        existing = {
-            sale.product_id: sale
-            for sale in DailySale.objects.filter(shop=self.shop, sale_date=self.day)
+        existing = {}
+        extras = {}
+        for sale in (
+            DailySale.objects.filter(shop=self.shop, sale_date=self.day)
             .order_by("pk")
-        }
+        ):
+            if sale.product_id in existing:
+                extras.setdefault(sale.product_id, []).append(sale)
+            else:
+                existing[sale.product_id] = sale
 
         saved = []
         for product_id, figures in entries.items():
             sale = existing.get(product_id)
+            # A repeated bulk import can leave identical rows beside the one we
+            # rewrite; drop them so this product is not counted twice.
+            for extra in extras.get(product_id, ()):
+                extra.delete()
             if sale is None:
                 sale = DailySale(
                     shop=self.shop,

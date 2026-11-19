@@ -92,12 +92,12 @@
 </nav>
 
 {% if user.is_authenticated %}
-<nav class="border-t border-slate-700 bg-slate-900 px-4 py-2 md:hidden" aria-label="Mobile navigation">
+<nav class="border-t border-slate-700 bg-slate-900 px-4 py-2 text-white md:hidden" aria-label="Mobile navigation">
     <div class="mx-auto flex max-w-7xl flex-wrap gap-x-5 gap-y-2 sm:px-2">
         {% if user.role == 'OWNER' %}
         <a href="{% url 'owner_dashboard' %}" class="py-1 text-sm font-medium hover:text-indigo-300">All Shops</a>
         <a href="{% url 'product_report' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Reports / Profit Sheets</a>
-        <a href="{% url 'product_comparison' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Compare</a>
+        <a href="{% url 'product_comparison' %}" class="py-1 text-sm font-medium text-white hover:text-indigo-300">Compare</a>
         <a href="{% url 'shop_pricing' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Pricing</a>
         {% else %}
         <a href="{% url 'manager_dashboard' %}" class="py-1 text-sm font-medium hover:text-indigo-300">My Shop</a>
