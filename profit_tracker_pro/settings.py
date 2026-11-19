@@ -25,8 +25,8 @@ INSTALLED_APPS = [
 ]
 
 JAZZMIN_SETTINGS = {
-    "site_title": "Profit Tracker Admin",
-    "site_header": "Profit Tracker",
+    "site_title": "Empire Admin",
+    "site_header": "Empire",
     "site_brand": "Mufasa's Inventory",
     "welcome_sign": "Welcome back, Mufasa!",
     "search_model": ["tracker.MasterProduct", "tracker.DailySale"],
