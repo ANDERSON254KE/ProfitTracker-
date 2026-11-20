@@ -274,7 +274,15 @@ class DailySale(models.Model):
                 fields=["shop", "product", "sale_date"],
                 condition=models.Q(is_profit_sheet_entry=True),
                 name="unique_profit_sheet_sale_per_shop_product_day",
-            )
+            ),
+            # A stock entry is the whole day for that product, so rewriting the
+            # daily sheet replaces it: the database refuses a second row even
+            # when two submits (or a double-tap) race each other.
+            models.UniqueConstraint(
+                fields=["shop", "product", "sale_date"],
+                condition=models.Q(total_stock__isnull=False),
+                name="unique_stock_entry_per_shop_product_day",
+            ),
         ]
 
     @property

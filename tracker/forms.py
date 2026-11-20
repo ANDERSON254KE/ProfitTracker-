@@ -12,6 +12,7 @@ every money figure -- are derived server side.
 from decimal import Decimal, InvalidOperation
 
 from django import forms
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import (
@@ -364,6 +365,16 @@ class DailySalesSheetForm(forms.Form):
             else:
                 existing[sale.product_id] = sale
 
+        def fill(sale, figures):
+            """Put one product's submitted figures on ``sale``."""
+            sale.recorded_by = recorder
+            sale.is_profit_sheet_entry = False
+            sale.opening_stock = figures["opening"]
+            sale.additional_stock = figures["additional"]
+            sale.total_stock = figures["total"]
+            sale.closing_stock = figures["closing"]
+            return sale
+
         saved = []
         for product_id, figures in entries.items():
             sale = existing.get(product_id)
@@ -372,19 +383,25 @@ class DailySalesSheetForm(forms.Form):
             for extra in extras.get(product_id, ()):
                 extra.delete()
             if sale is None:
-                sale = DailySale(
-                    shop=self.shop,
-                    product_id=product_id,
-                    recorded_by=recorder,
+                sale = fill(
+                    DailySale(shop=self.shop, product_id=product_id, sale_date=self.day),
+                    figures,
                 )
             else:
-                sale.recorded_by = recorder
-            sale.is_profit_sheet_entry = False
-            sale.opening_stock = figures["opening"]
-            sale.additional_stock = figures["additional"]
-            sale.total_stock = figures["total"]
-            sale.closing_stock = figures["closing"]
-            sale.save()
+                fill(sale, figures)
+            try:
+                with transaction.atomic():
+                    sale.save()
+            except IntegrityError:
+                # A parallel submit (a double-tap on Save) wrote this product's
+                # row first. Rewrite that row instead of adding a second one.
+                sale = DailySale.objects.get(
+                    shop=self.shop,
+                    product_id=product_id,
+                    sale_date=self.day,
+                    total_stock__isnull=False,
+                )
+                fill(sale, figures).save()
             saved.append(sale)
 
         return saved

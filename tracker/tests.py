@@ -10,17 +10,20 @@ import tempfile
 from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO, StringIO
+from unittest import mock
 
 import openpyxl
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from tracker.forms import DailySalesSheetForm
 from tracker.models import (
     DailySale,
     MasterProduct,
@@ -1491,6 +1494,102 @@ class DailySalesSheetTests(BaseDataTestCase):
         row = rows.get()
         self.assertEqual(row.closing_stock, Decimal("8"))
         self.assertEqual(row.units_sold, Decimal("2.00"))
+
+    def test_rewriting_the_sheet_replaces_the_whole_day(self):
+        """A second submit overwrites the day: no second rows, cash replaced."""
+        self.client.force_login(self.fig_manager)
+        self.post_stock(
+            (self.gilbeys, {"additional": "10", "total": "10", "closing": "6"}),
+            (self.blue_ice, {"additional": "5", "total": "5", "closing": "1"}),
+        )
+
+        payload = {}
+        payload.update(self.stock(self.gilbeys, additional="10", closing="9"))
+        payload.update(self.stock(self.blue_ice, additional="5", closing="5"))
+        payload.update({"mpesa": "1500", "bill_out": "0", "bill_paid": "0"})
+        self.client.post(reverse(self.SHEET), payload)
+
+        self.assertEqual(DailySale.objects.filter(shop=self.fig_tree).count(), 2)
+        gilbeys = DailySale.objects.get(shop=self.fig_tree, product=self.gilbeys)
+        self.assertEqual(gilbeys.units_sold, Decimal("1.00"))
+        self.assertEqual(
+            DailySale.objects.get(shop=self.fig_tree, product=self.blue_ice).units_sold,
+            Decimal("0.00"),
+        )
+        cash = ShopDailyCash.objects.get(shop=self.fig_tree)
+        self.assertEqual(cash.mpesa, Decimal("1500.00"))
+        self.assertEqual(ShopDailyCash.objects.filter(shop=self.fig_tree).count(), 1)
+
+    def test_the_database_refuses_a_second_stock_row_for_the_same_day(self):
+        """One stock row per product per day, enforced by the database itself."""
+        row = {
+            "shop": self.fig_tree,
+            "product": self.gilbeys,
+            "sale_date": timezone.localdate(),
+            "recorded_by": self.fig_manager,
+            "units_sold": Decimal("1"),
+            "opening_stock": Decimal("0"),
+            "additional_stock": Decimal("5"),
+            "total_stock": Decimal("5"),
+            "closing_stock": Decimal("4"),
+        }
+        DailySale.objects.create(**row)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            DailySale.objects.create(**row)
+
+    def test_a_simultaneous_submit_rewrites_instead_of_duplicating(self):
+        """A double-tap that slips past the lookup still leaves one row."""
+        day = timezone.localdate()
+        form = DailySalesSheetForm(
+            {
+                f"{DailySalesSheetForm.ADDITIONAL_PREFIX}{self.gilbeys.pk}": "10",
+                f"{DailySalesSheetForm.CLOSING_PREFIX}{self.gilbeys.pk}": "3",
+            },
+            shop=self.fig_tree,
+            openings={},
+            day=day,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+        # Snapshot the day's rows as empty, then let a competing submit land
+        # before this one writes: the insert must not become a second row.
+        real_filter = DailySale.objects.filter
+        landed = []
+
+        class Snapshot(list):
+            """Rows read before the race; ``order_by`` is already applied."""
+
+            def order_by(self, *fields):
+                return self
+
+        def filter_then_race(*args, **kwargs):
+            rows = Snapshot(real_filter(*args, **kwargs))
+            if not landed:
+                landed.append(True)
+                DailySale.objects.create(
+                    shop=self.fig_tree,
+                    product=self.gilbeys,
+                    sale_date=day,
+                    recorded_by=self.fig_manager,
+                    units_sold=Decimal("0"),
+                    opening_stock=Decimal("0"),
+                    additional_stock=Decimal("20"),
+                    total_stock=Decimal("20"),
+                    closing_stock=Decimal("20"),
+                )
+            return rows
+
+        with mock.patch.object(DailySale.objects, "filter", filter_then_race):
+            saved = form.save(self.fig_manager)
+
+        self.assertEqual(len(saved), 1)
+        rows = DailySale.objects.filter(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day
+        )
+        self.assertEqual(rows.count(), 1)
+        row = rows.get()
+        self.assertEqual(row.closing_stock, Decimal("3.00"))
+        self.assertEqual(row.units_sold, Decimal("7.00"))
 
     def test_blank_row_means_no_activity(self):
         self.client.force_login(self.fig_manager)
