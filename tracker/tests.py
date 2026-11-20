@@ -872,9 +872,11 @@ class ProductReportTests(BaseDataTestCase):
         self.assertEqual(totals[self.empire.pk], Decimal("1500.00"))
         self.assertEqual(response.context["grand_total"], Decimal("1700.00"))
 
-    def test_a_manager_is_refused(self):
+    def test_a_manager_can_access_product_report(self):
+        """Managers can view the product report and use open_sheet_shop to open a shop's profit sheet."""
         self.client.force_login(self.fig_manager)
-        self.assertEqual(self.client.get(reverse("product_report")).status_code, 403)
+        response = self.client.get(reverse("product_report"))
+        self.assertEqual(response.status_code, 200)
 
     def test_csv_export_lists_every_product_and_shop(self):
         self.client.force_login(self.owner)

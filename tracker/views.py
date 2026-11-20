@@ -47,6 +47,7 @@ from .forms import (
 )
 from .mixins import (
     LoginRequiredMixin,
+    ManagerOwnerRequiredMixin,
     ManagerRequiredMixin,
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
@@ -1851,7 +1852,7 @@ def _all_shops_profit_date_range(request):
     return start_date, end_date
 
 
-class ProductReportView(OwnerRequiredMixin, TemplateView):
+class ProductReportView(ManagerOwnerRequiredMixin, TemplateView):
     """Date-filtered report: every product, one profit column per shop.
 
     Complements :class:`ProductComparisonView`, which compares up to five

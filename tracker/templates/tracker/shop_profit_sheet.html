@@ -61,6 +61,15 @@
             max-width: 100%;
         }
 
+        .sheet-responsive-table tr.hidden,
+        .sheet-responsive-table tbody tr.hidden {
+            display: none;
+        }
+
+        .product-category-group.hidden {
+            display: none;
+        }
+
         .sheet-expense-table td[data-label="Description"] {
             grid-column: 1 / -1;
         }
@@ -186,16 +195,16 @@
     const groups = document.querySelectorAll(".product-category-group");
 
     function filterProducts() {
-        const allQuery = allSearch.value.trim().toLocaleLowerCase();
+        const allQuery = (allSearch ? allSearch.value : "").trim().toLocaleLowerCase();
         groups.forEach(function (group) {
             const categorySearch = group.querySelector("[data-category-search]");
-            const categoryQuery = categorySearch.value.trim().toLocaleLowerCase();
+            const categoryQuery = (categorySearch ? categorySearch.value : "").trim().toLocaleLowerCase();
             const rows = group.querySelectorAll(".product-search-row");
             let visible = 0;
 
             rows.forEach(function (row) {
-                const searchText = row.dataset.productSearch || "";
-                const matches = searchText.includes(allQuery) && searchText.includes(categoryQuery);
+                const searchText = (row.dataset.productSearch || "").toLowerCase();
+                const matches = searchText.indexOf(allQuery) !== -1 && searchText.indexOf(categoryQuery) !== -1;
                 row.classList.toggle("hidden", !matches);
                 if (matches) visible += 1;
             });

@@ -50,6 +50,12 @@ class OwnerRequiredMixin(RoleRequiredMixin):
     allowed_roles = (CustomUser.Role.OWNER,)
 
 
+class ManagerOwnerRequiredMixin(RoleRequiredMixin):
+    """Restrict a view to users with the OWNER or MANAGER role."""
+
+    allowed_roles = (CustomUser.Role.OWNER, CustomUser.Role.MANAGER)
+
+
 class ManagerRequiredMixin(RoleRequiredMixin):
     """Restrict a view to users with the MANAGER role."""
 
