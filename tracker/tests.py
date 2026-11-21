@@ -63,6 +63,17 @@ class MoneyFilterTests(TestCase):
         self.assertEqual(units(None), "0")
 
 
+class PageLoaderTests(TestCase):
+    """The spinner ships in the shared layout so every page shows it."""
+
+    def test_loader_markup_styles_and_script_are_on_every_page(self):
+        response = self.client.get(reverse("login"))
+        self.assertContains(response, 'id="page-loader"')
+        self.assertContains(response, '<span class="loader"></span>')
+        self.assertContains(response, "@keyframes rotationBack")
+        self.assertContains(response, "window.addEventListener('load', hide)")
+
+
 @override_settings(PASSWORD_HASHERS=FAST_PASSWORD_HASHER)
 class BaseDataTestCase(TestCase):
     """Shared fixtures: two shops with different prices for the same product."""
@@ -571,6 +582,33 @@ class ShopDetailViewTests(BaseDataTestCase):
             [self.blue_ice.pk],
         )
         self.assertEqual(today_page.context["day_totals"]["revenue"], Decimal("800.00"))
+
+    def test_daily_cards_cover_sales_expenses_and_net_profit_for_the_selected_date(self):
+        """The three money cards follow ?date= and net profit subtracts expenses."""
+        self.client.force_login(self.owner)
+        today = timezone.localdate()
+        ShopExpense.objects.create(
+            shop=self.fig_tree, expense_date=today, description="Water",
+            amount=Decimal("50.00"), recorded_by=self.fig_manager,
+        )
+        page = self.client.get(reverse("shop_detail", args=[self.fig_tree.pk]))
+        cards = page.context["daily_cards"]
+        self.assertEqual(cards["sales"], Decimal("800.00"))
+        self.assertEqual(cards["expenses"], Decimal("50.00"))
+        self.assertEqual(cards["profit"], Decimal("150.00"))
+        self.assertContains(page, "Daily sales")
+        self.assertContains(page, "Daily expenses")
+        self.assertContains(page, "Daily profit")
+
+        old_day = today - timedelta(days=3)
+        old_page = self.client.get(
+            reverse("shop_detail", args=[self.fig_tree.pk]),
+            {"date": old_day.isoformat()},
+        )
+        old_cards = old_page.context["daily_cards"]
+        self.assertEqual(old_cards["sales"], Decimal("550.00"))
+        self.assertEqual(old_cards["expenses"], Decimal("0.00"))
+        self.assertEqual(old_cards["profit"], Decimal("100.00"))
 
     def test_most_sold_products_are_ranked_by_units(self):
         self.client.force_login(self.owner)

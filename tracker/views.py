@@ -2457,6 +2457,11 @@ class ShopDetailView(OwnerRequiredMixin, DetailView):
         cash = total_sales - mpesa
         context["cash_form"] = ShopDailyCashForm(instance=cash_record)
         context["today_expenses"] = day_expenses
+        context["daily_cards"] = {
+            "sales": total_sales,
+            "expenses": expense_today,
+            "profit": context["day_totals"]["profit"] - expense_today,
+        }
         context["cash_summary"] = {
             "total_sales": total_sales,
             "mpesa": mpesa,

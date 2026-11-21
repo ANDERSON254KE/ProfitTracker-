@@ -50,6 +50,27 @@
     </a>
 </div>
 
+{# ---- Money cards for the selected trading day ---- #}
+<div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Daily sales · {{ selected_date|date:"d M Y" }}</p>
+        <p class="mt-2 text-2xl font-bold tabular-nums text-slate-900">{{ daily_cards.sales|ksh }}</p>
+        <p class="mt-1 text-xs text-slate-500">{{ day_totals.units|units }} unit(s) sold</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Daily expenses · {{ selected_date|date:"d M Y" }}</p>
+        <p class="mt-2 text-2xl font-bold tabular-nums text-rose-600">{{ daily_cards.expenses|ksh }}</p>
+        <p class="mt-1 text-xs text-slate-500">{{ today_expenses|length }} expense(s) recorded</p>
+    </div>
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-emerald-800">Daily profit · {{ selected_date|date:"d M Y" }}</p>
+        <p class="mt-2 text-2xl font-bold tabular-nums {% if daily_cards.profit < 0 %}text-rose-600{% else %}text-emerald-700{% endif %}">
+            {{ daily_cards.profit|ksh }}
+        </p>
+        <p class="mt-1 text-xs text-emerald-800">Sales profit less expenses</p>
+    </div>
+</div>
+
 {# ---- Today's sheet: M-Pesa, cash, bills and the balance carried forward ---- #}
 <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-5">
     <div class="rounded-xl bg-white p-5 shadow lg:col-span-2">
