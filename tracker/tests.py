@@ -242,18 +242,26 @@ class ManagerDashboardIsolationTests(BaseDataTestCase):
             recorded_by=self.empire_manager,
         )
 
-    def test_fig_tree_manager_sees_only_fig_tree_profit(self):
+    def test_fig_tree_manager_sees_only_fig_tree_figures(self):
         self.client.force_login(self.fig_manager)
         response = self.client.get(reverse("manager_dashboard"))
         self.assertEqual(response.context["shop"], self.fig_tree)
-        self.assertEqual(response.context["total_profit"], Decimal("200.00"))
         self.assertEqual(response.context["total_units"], Decimal("2"))
+        self.assertEqual(response.context["today_units"], Decimal("2"))
+        self.assertEqual(response.context["today_revenue"], Decimal("1100.00"))
+        self.assertNotIn("today_profit", response.context)
+        self.assertNotIn("total_profit", response.context)
+        self.assertNotContains(response, ">Profit</th>")
+        self.assertNotContains(response, ">Cost</th>")
 
-    def test_empire_manager_sees_only_empire_profit(self):
+    def test_empire_manager_sees_only_empire_figures(self):
         self.client.force_login(self.empire_manager)
         response = self.client.get(reverse("manager_dashboard"))
         self.assertEqual(response.context["shop"], self.empire)
-        self.assertEqual(response.context["total_profit"], Decimal("1500.00"))
+        self.assertEqual(response.context["total_units"], Decimal("10"))
+        self.assertEqual(response.context["today_revenue"], Decimal("6000.00"))
+        self.assertNotIn("today_profit", response.context)
+        self.assertNotIn("total_profit", response.context)
 
     def test_recent_history_excludes_other_shops(self):
         self.client.force_login(self.fig_manager)
@@ -323,22 +331,26 @@ class DailySaleCreateTests(BaseDataTestCase):
 
 
 class PriceApiTests(BaseDataTestCase):
-    """The live-preview JSON endpoint."""
+    """The shop-scoped selling-price JSON endpoint."""
 
     def url_for(self, product):
         return reverse("shop_product_price", args=[product.pk])
 
-    def test_returns_the_managers_own_shop_price(self):
+    def test_returns_only_the_managers_own_shop_selling_price(self):
         self.client.force_login(self.fig_manager)
         response = self.client.get(self.url_for(self.gilbeys))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["cost_price"], "450.00")
-        self.assertEqual(response.json()["selling_price"], "550.00")
+        payload = response.json()
+        self.assertEqual(set(payload), {"product", "selling_price"})
+        self.assertEqual(payload["product"], str(self.gilbeys))
+        self.assertEqual(payload["selling_price"], "550.00")
 
     def test_the_same_product_prices_differ_per_shop(self):
         self.client.force_login(self.empire_manager)
         response = self.client.get(self.url_for(self.gilbeys))
-        self.assertEqual(response.json()["selling_price"], "600.00")
+        payload = response.json()
+        self.assertEqual(payload["selling_price"], "600.00")
+        self.assertNotIn("cost_price", payload)
 
     def test_product_not_stocked_is_a_404(self):
         self.client.force_login(self.empire_manager)
@@ -382,6 +394,11 @@ class PageRenderTests(BaseDataTestCase):
         response = self.client.get(reverse("manager_dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Fig Tree")
+        self.assertContains(response, ">Price</th>")
+        self.assertContains(response, ">Revenue</th>")
+        self.assertNotContains(response, ">Profit</th>")
+        self.assertNotContains(response, ">Cost</th>")
+        self.assertNotContains(response, "chart-manager-trend")
 
     def test_sale_form_renders(self):
         self.client.force_login(self.fig_manager)
@@ -448,13 +465,16 @@ class DashboardAnalyticsTests(BaseDataTestCase):
         self.assertEqual(top["labels"], ["Gilbeys · 250ml"])
         self.assertEqual(top["values"], [1700.0])
 
-    def test_manager_dashboard_carries_a_14_day_trend(self):
+    def test_manager_dashboard_has_no_profit_or_trend_payload(self):
         self.client.force_login(self.fig_manager)
         response = self.client.get(reverse("manager_dashboard"))
-        trend = response.context["trend"]
-        self.assertEqual(len(trend["labels"]), 14)
-        self.assertEqual(len(trend["values"]), 14)
-        self.assertEqual(sum(trend["values"]), 200.0)
+        self.assertNotIn("trend", response.context)
+        self.assertNotIn("today_profit", response.context)
+        self.assertNotIn("total_profit", response.context)
+        self.assertEqual(response.context["total_units"], Decimal("2"))
+        self.assertNotContains(response, 'id="manager-trend"')
+        self.assertNotContains(response, "chart-manager-trend")
+        self.assertNotContains(response, "Daily profit")
 
 
 class ShopDetailViewTests(BaseDataTestCase):
@@ -910,11 +930,12 @@ class ProductReportTests(BaseDataTestCase):
         self.assertEqual(totals[self.empire.pk], Decimal("1500.00"))
         self.assertEqual(response.context["grand_total"], Decimal("1700.00"))
 
-    def test_a_manager_can_access_product_report(self):
-        """Managers can view the product report and use open_sheet_shop to open a shop's profit sheet."""
+    def test_a_manager_cannot_access_product_report(self):
+        """The cross-shop report (and its profit-sheet picker) is owner-only."""
         self.client.force_login(self.fig_manager)
         response = self.client.get(reverse("product_report"))
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
+        self.assertNotContains(response, 'name="open_sheet_shop"', status_code=403)
 
     def test_csv_export_lists_every_product_and_shop(self):
         self.client.force_login(self.owner)
@@ -1035,6 +1056,35 @@ class ShopPricingTests(BaseDataTestCase):
         self.assertEqual(set(grouped), {self.fig_tree, self.empire})
         self.assertEqual(len(grouped[self.fig_tree]), 2)
 
+    def test_new_product_is_added_to_every_shop_with_zero_prices(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("shop_pricing"),
+            {"new_product_name": "Fanta", "new_product_category": "Soda"},
+        )
+        self.assertRedirects(
+            response, reverse("shop_pricing"), fetch_redirect_response=False
+        )
+
+        product = MasterProduct.objects.get(name="Fanta", category="Soda")
+        for shop in (self.fig_tree, self.empire):
+            card = ShopProduct.objects.get(shop=shop, product=product)
+            self.assertEqual(card.cost_price, Decimal("0.00"))
+            self.assertEqual(card.selling_price, Decimal("0.00"))
+            self.assertTrue(card.is_active)
+
+        page = self.client.get(reverse("shop_pricing"))
+        messages = [str(message) for message in page.context["messages"]]
+        self.assertTrue(
+            any("Set its prices on each shop card" in message for message in messages),
+            messages,
+        )
+
+        self.client.force_login(self.fig_manager)
+        sheet = self.client.get(reverse("daily_sales_sheet"))
+        self.assertIn("Fanta", {row["product"].name for row in sheet.context["rows"]})
+        self.assertContains(sheet, "needs pricing")
+
     def test_a_manager_cannot_save_prices(self):
         self.client.force_login(self.fig_manager)
         card = ShopProduct.objects.get(shop=self.fig_tree, product=self.gilbeys)
@@ -1053,8 +1103,8 @@ class ShopPricingTests(BaseDataTestCase):
 class ShopProfitSheetTests(BaseDataTestCase):
     """Manual daily quantities and expense deductions stay shop-scoped."""
 
-    def test_manager_records_units_and_expense_for_own_shop_and_date(self):
-        self.client.force_login(self.fig_manager)
+    def test_owner_records_units_and_expense_for_selected_shop_and_date(self):
+        self.client.force_login(self.owner)
         day = timezone.localdate() - timedelta(days=2)
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
         response = self.client.post(
@@ -1067,6 +1117,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             shop=self.fig_tree, product=self.gilbeys, sale_date=day,
             is_profit_sheet_entry=True,
         )
+        self.assertEqual(sale.recorded_by, self.owner)
         self.assertEqual(sale.units_sold, Decimal("4"))
         self.assertEqual(sale.total_revenue, Decimal("2200.00"))
         self.assertEqual(sale.profit, Decimal("400.00"))
@@ -1083,8 +1134,22 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertEqual(response.context["expense_total"], Decimal("75.00"))
         self.assertEqual(response.context["net_profit"], Decimal("325.00"))
 
-    def test_manual_quantities_update_instead_of_double_counting(self):
+    def test_manager_cannot_open_or_write_to_the_profit_sheet(self):
         self.client.force_login(self.fig_manager)
+        day = timezone.localdate()
+        for shop in (self.fig_tree, self.empire):
+            url = reverse("shop_profit_sheet", args=[shop.pk])
+            self.assertEqual(self.client.get(url).status_code, 403)
+            response = self.client.post(
+                url,
+                {"date": day.isoformat(), "action": "save_sales",
+                 f"units_{self.gilbeys.pk}": "4"},
+            )
+            self.assertEqual(response.status_code, 403)
+        self.assertFalse(DailySale.objects.filter(is_profit_sheet_entry=True).exists())
+
+    def test_manual_quantities_update_instead_of_double_counting(self):
+        self.client.force_login(self.owner)
         day = timezone.localdate()
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
         for quantity in ("4", "2"):
@@ -1097,28 +1162,24 @@ class ShopProfitSheetTests(BaseDataTestCase):
                                      is_profit_sheet_entry=True).count(),
             1,
         )
-        self.assertEqual(
-            DailySale.objects.get(shop=self.fig_tree, product=self.gilbeys, sale_date=day,
-                                  is_profit_sheet_entry=True).profit,
-            Decimal("200.00"),
+        saved = DailySale.objects.get(
+            shop=self.fig_tree, product=self.gilbeys, sale_date=day,
+            is_profit_sheet_entry=True,
         )
+        self.assertEqual(saved.profit, Decimal("200.00"))
+        self.assertEqual(saved.recorded_by, self.owner)
 
-    def test_manager_cannot_write_to_another_shop(self):
+    def test_manager_cannot_write_to_any_shop(self):
         self.client.force_login(self.fig_manager)
         day = timezone.localdate()
-        other_shop_url = reverse("shop_profit_sheet", args=[self.empire.pk])
-        self.client.post(
-            other_shop_url,
-            {"date": day.isoformat(), "action": "save_sales", f"units_{self.gilbeys.pk}": "3"},
-        )
-        self.assertTrue(
-            DailySale.objects.filter(shop=self.fig_tree, product=self.gilbeys,
-                                     is_profit_sheet_entry=True).exists()
-        )
-        self.assertFalse(
-            DailySale.objects.filter(shop=self.empire, product=self.gilbeys,
-                                     is_profit_sheet_entry=True).exists()
-        )
+        for shop in (self.fig_tree, self.empire):
+            response = self.client.post(
+                reverse("shop_profit_sheet", args=[shop.pk]),
+                {"date": day.isoformat(), "action": "save_sales",
+                 f"units_{self.gilbeys.pk}": "3"},
+            )
+            self.assertEqual(response.status_code, 403)
+        self.assertFalse(DailySale.objects.filter(is_profit_sheet_entry=True).exists())
 
     def test_owner_can_open_and_record_for_the_selected_shop(self):
         self.client.force_login(self.owner)
@@ -1155,7 +1216,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             recorded_by=self.fig_manager,
             legacy_source_id=91001,
         )
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
         response = self.client.get(
             url,
@@ -1194,7 +1255,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertEqual(saved.gross_profit, Decimal("200.00"))
         self.assertEqual(saved.expense_total, Decimal("250.00"))
         self.assertEqual(saved.net_profit, Decimal("-50.00"))
-        self.assertEqual(saved.calculated_by, self.fig_manager)
+        self.assertEqual(saved.calculated_by, self.owner)
 
         end_sale = DailySale.objects.get(
             shop=self.fig_tree,
@@ -1224,7 +1285,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             is_profit_sheet_entry=True,
             recorded_by=self.fig_manager,
         )
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
         response = self.client.post(
             url,
@@ -1263,11 +1324,12 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertEqual(record.gross_profit, Decimal("300.00"))
         self.assertEqual(record.net_profit, Decimal("250.00"))
 
-    def test_expense_range_batch_cannot_write_to_another_shop(self):
-        self.client.force_login(self.fig_manager)
+    def test_expense_range_batch_writes_only_to_the_selected_shop(self):
+        self.client.force_login(self.owner)
         day = timezone.localdate()
-        self.client.post(
-            reverse("shop_profit_sheet", args=[self.empire.pk]),
+        url = reverse("shop_profit_sheet", args=[self.empire.pk])
+        response = self.client.post(
+            url,
             {
                 "date": day.isoformat(),
                 "action": "calculate_daily_profit",
@@ -1276,11 +1338,12 @@ class ShopProfitSheetTests(BaseDataTestCase):
                 f"expense_total_{day.isoformat()}": "75.00",
             },
         )
-        self.assertTrue(ShopExpense.objects.filter(shop=self.fig_tree, amount=Decimal("75.00")).exists())
-        self.assertFalse(ShopExpense.objects.filter(shop=self.empire, amount=Decimal("75.00")).exists())
+        self.assertRedirects(response, f"{url}?date={day.isoformat()}")
+        self.assertTrue(ShopExpense.objects.filter(shop=self.empire, amount=Decimal("75.00")).exists())
+        self.assertFalse(ShopExpense.objects.filter(shop=self.fig_tree, amount=Decimal("75.00")).exists())
 
     def test_profit_sheet_expenses_use_the_selected_trading_date_only(self):
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         today = timezone.localdate()
         response = self.client.get(
             reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
@@ -1304,7 +1367,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
             closing_stock=Decimal("9"),
             recorded_by=self.fig_manager,
         )
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         response = self.client.post(
             reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
             {
@@ -1320,7 +1383,7 @@ class ShopProfitSheetTests(BaseDataTestCase):
         )
 
     def test_profit_sheet_groups_products_by_price_list_category(self):
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
         groups = response.context["category_groups"]
         self.assertEqual(groups[0]["category"], "250ml")
@@ -1340,17 +1403,26 @@ class ShopProfitSheetTests(BaseDataTestCase):
         self.assertNotContains(response, "Products awaiting shop pricing")
 
     def test_profit_sheet_has_global_and_per_category_search(self):
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
         self.assertContains(response, 'id="allProductSearch"')
         self.assertContains(response, "data-category-search")
         self.assertContains(response, "data-product-search=")
 
-    def test_profit_sheet_link_is_available_in_mobile_navigation(self):
+    def test_manager_has_no_profit_sheet_link_or_access(self):
         self.client.force_login(self.fig_manager)
-        response = self.client.get(reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
-        self.assertContains(response, 'aria-label="Mobile navigation"')
-        self.assertContains(response, reverse("shop_profit_sheet", args=[self.fig_tree.pk]))
+        dashboard = self.client.get(reverse("manager_dashboard"))
+        self.assertContains(dashboard, 'aria-label="Mobile navigation"')
+        self.assertNotContains(dashboard, "Profit Sheet")
+        self.assertNotContains(
+            dashboard, reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("shop_profit_sheet", args=[self.fig_tree.pk])
+            ).status_code,
+            403,
+        )
 
     def test_owner_has_profit_sheets_navigation_link(self):
         self.client.force_login(self.owner)
@@ -1473,6 +1545,60 @@ class DailySalesSheetTests(BaseDataTestCase):
         # the M-Pesa share is taken out.
         self.assertEqual(page.context["cash_total_sales"], Decimal("2200.00"))
         self.assertEqual(page.context["cash_cash"], Decimal("1900.00"))
+        self.assertEqual(page.context["cash_balance"], Decimal("1850.00"))
+
+    def test_expenses_are_saved_and_included_in_the_balance(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="10", closing="6")
+        payload.update({
+            "mpesa": "300", "bill_out": "100", "bill_paid": "50",
+            "expenses": "75.00",
+        })
+        self.assertRedirects(
+            self.client.post(reverse(self.SHEET), payload), reverse(self.SHEET)
+        )
+
+        expense = ShopExpense.objects.get(
+            shop=self.fig_tree, expense_date=timezone.localdate()
+        )
+        self.assertEqual(expense.amount, Decimal("75.00"))
+        self.assertEqual(expense.description, "Daily expenses")
+        self.assertEqual(expense.recorded_by, self.fig_manager)
+
+        page = self.client.get(reverse(self.SHEET))
+        self.assertEqual(page.context["cash_total_sales"], Decimal("2200.00"))
+        self.assertEqual(page.context["cash_cash"], Decimal("1900.00"))
+        self.assertEqual(page.context["cash_expense_total"], Decimal("75.00"))
+        self.assertEqual(page.context["cash_expenses"], "75")
+        self.assertEqual(page.context["cash_balance"], Decimal("1775.00"))
+        self.assertContains(page, "KSh 1,775.00")
+
+        payload["expenses"] = "25.00"
+        self.client.post(reverse(self.SHEET), payload)
+        expense.refresh_from_db()
+        self.assertEqual(expense.amount, Decimal("25.00"))
+        self.assertEqual(ShopExpense.objects.filter(shop=self.fig_tree).count(), 1)
+        self.assertEqual(
+            self.client.get(reverse(self.SHEET)).context["cash_balance"],
+            Decimal("1825.00"),
+        )
+
+    def test_invalid_expense_amount_is_rejected(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="10", closing="6")
+        payload["expenses"] = "-5"
+        response = self.client.post(reverse(self.SHEET), payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(
+            any(
+                "Expenses: enter a non-negative amount" in error
+                for error in response.context["form_errors"]
+            ),
+            response.context["form_errors"],
+        )
+        self.assertEqual(response.context["cash_expenses"], "-5")
+        self.assertFalse(ShopExpense.objects.exists())
+        self.assertFalse(DailySale.objects.exists())
 
     def test_total_stock_is_derived_when_it_is_not_typed(self):
         """The sheet only asks for opening, additional and closing stock."""
@@ -1519,6 +1645,52 @@ class DailySalesSheetTests(BaseDataTestCase):
         )
         self.assertEqual(today.opening_stock, Decimal("9.00"))
         self.assertEqual(today.units_sold, Decimal("7.00"))
+
+    def test_opening_stock_without_a_closing_count_is_rejected(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            sale_date=yesterday,
+            units_sold=Decimal("0"),
+            opening_stock=Decimal("0.00"),
+            additional_stock=Decimal("20.00"),
+            total_stock=Decimal("20.00"),
+            closing_stock=Decimal("9.00"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+        page = self.client.get(reverse(self.SHEET))
+        self.assertEqual(page.context["openings"][self.gilbeys.pk], Decimal("9.00"))
+
+        response = self.client.post(
+            reverse(self.SHEET),
+            {f"open_{self.gilbeys.pk}": "9.00"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(
+            any(
+                "closing stock is required" in error
+                for error in response.context["form_errors"]
+            ),
+            response.context["form_errors"],
+        )
+
+        response = self.client.post(
+            reverse(self.SHEET), {f"add_{self.gilbeys.pk}": "1"}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            DailySale.objects.filter(sale_date=timezone.localdate()).exists()
+        )
+
+        response = self.post_stock((self.gilbeys, {"closing": "9"}))
+        self.assertRedirects(response, reverse(self.SHEET))
+        today = DailySale.objects.get(
+            product=self.gilbeys, sale_date=timezone.localdate()
+        )
+        self.assertEqual(today.opening_stock, Decimal("9.00"))
+        self.assertEqual(today.units_sold, Decimal("0.00"))
 
     def test_second_submit_replaces_todays_row(self):
         self.client.force_login(self.fig_manager)
@@ -1753,8 +1925,8 @@ class DailySalesSheetTests(BaseDataTestCase):
         self.assertNotContains(dash, "Today's Profit")
         self.assertNotContains(dash, "Total Net Profit")
 
-    def test_products_without_a_cost_are_left_off_the_sheet(self):
-        """No cost, no profit -- so the product is not offered at all."""
+    def test_products_without_a_cost_stay_on_the_sheet(self):
+        """A zero cost price is a valid card; the product still gets counted."""
         ShopProduct.objects.filter(shop=self.fig_tree, product=self.blue_ice).update(
             cost_price=Decimal("0.00")
         )
@@ -1762,18 +1934,34 @@ class DailySalesSheetTests(BaseDataTestCase):
         response = self.client.get(reverse(self.SHEET))
         self.assertEqual(response.status_code, 200)
         names = {r["product"].name for r in response.context["rows"]}
-        self.assertIn("Gilbeys", names)
-        self.assertNotIn("Blue Ice", names)
-        # Not rendered anywhere on the page either.
-        self.assertNotIn("Blue Ice", response.content.decode())
-        self.assertContains(response, "until the owner prices them")
+        self.assertEqual(names, {"Gilbeys", "Blue Ice"})
+        self.assertContains(response, f'name="add_{self.blue_ice.pk}"')
 
-        # A crafted POST cannot force an unpriced product in either.
         response = self.post_stock(
             (self.blue_ice, {"additional": "10", "total": "10", "closing": "0"}),
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(DailySale.objects.filter(product=self.blue_ice).exists())
+        self.assertRedirects(response, reverse(self.SHEET))
+        sale = DailySale.objects.get(product=self.blue_ice)
+        self.assertEqual(sale.unit_cost_at_sale, Decimal("0.00"))
+        self.assertEqual(sale.total_cost, Decimal("0.00"))
+        self.assertEqual(sale.total_revenue, Decimal("2000.00"))
+        self.assertEqual(sale.profit, Decimal("2000.00"))
+
+    def test_products_with_a_zero_selling_price_are_marked_needs_pricing(self):
+        ShopProduct.objects.filter(shop=self.fig_tree, product=self.blue_ice).update(
+            selling_price=Decimal("0.00")
+        )
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse(self.SHEET))
+        self.assertIn(
+            "Blue Ice", {row["product"].name for row in response.context["rows"]}
+        )
+
+        rows = response.content.decode().split('class="sheet-row')[1:]
+        blue_row = next(row for row in rows if ">Blue Ice</p>" in row)
+        gilbeys_row = next(row for row in rows if ">Gilbeys</p>" in row)
+        self.assertIn("needs pricing", blue_row)
+        self.assertNotIn("needs pricing", gilbeys_row)
 
     def test_rows_follow_the_price_list_row_order(self):
         """250ml first ... exactly as the owner's spreadsheet reads."""
@@ -2039,7 +2227,7 @@ class ProfitSheetResubmitTests(BaseDataTestCase):
 
     def setUp(self):
         super().setUp()
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
         self.day = timezone.localdate()
         self.url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
 
@@ -2087,6 +2275,7 @@ class ProfitSheetResubmitTests(BaseDataTestCase):
             1,
         )
         self.assertEqual(self._entry().units_sold, Decimal("6"))
+        self.assertEqual(self._entry().recorded_by, self.owner)
 
     def test_blank_leaves_the_entry_unchanged(self):
         self._submit("4")
@@ -2330,7 +2519,7 @@ class SingleRowPerDayTests(BaseDataTestCase):
     def test_profit_sheet_units_entered_twice_keep_the_latest(self):
         day = timezone.localdate()
         url = reverse("shop_profit_sheet", args=[self.fig_tree.pk])
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
 
         for units in ("5", "7"):
             self.client.post(
@@ -2354,7 +2543,7 @@ class SingleRowPerDayTests(BaseDataTestCase):
             shop=self.fig_tree, product=self.gilbeys, sale_date=day,
             units_sold=Decimal("3"), recorded_by=self.fig_manager,
         )
-        self.client.force_login(self.fig_manager)
+        self.client.force_login(self.owner)
 
         self.client.post(
             reverse("shop_profit_sheet", args=[self.fig_tree.pk]),
@@ -2373,6 +2562,7 @@ class SingleRowPerDayTests(BaseDataTestCase):
         self.assertEqual(sale.pk, legacy.pk)
         self.assertEqual(sale.units_sold, Decimal("8.00"))
         self.assertTrue(sale.is_profit_sheet_entry)
+        self.assertEqual(sale.recorded_by, self.owner)
 
 
 class MergeDuplicateSalesCommandTests(BaseDataTestCase):
@@ -2421,3 +2611,29 @@ class MergeDuplicateSalesCommandTests(BaseDataTestCase):
         # 8 units x (550 - 450) = 800, no longer 1350 from 11 units.
         self.assertEqual(saved.gross_profit, Decimal("800.00"))
         self.assertEqual(saved.sales_revenue, Decimal("4400.00"))
+
+
+class ServiceWorkerTests(TestCase):
+    """The offline shell bumps its cache and never serves stale HTML."""
+
+    def test_cache_is_bumped_and_only_non_html_gets_cached(self):
+        response = self.client.get(reverse("pwa_service_worker"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/javascript")
+        script = response.content.decode()
+        self.assertIn("const CACHE_NAME = 'empire-v2';", script)
+        self.assertNotIn("empire-v1", script)
+        self.assertIn(
+            "if (res.ok && req.mode !== 'navigate' && !type.includes('text/html'))",
+            script,
+        )
+        self.assertNotIn("if (req.method === 'GET') return;", script)
+        self.assertIn("if (req.method !== 'GET') return;", script)
+
+    def test_failed_navigation_offline_returns_a_503_text_response(self):
+        script = self.client.get(reverse("pwa_service_worker")).content.decode()
+        self.assertIn("if (req.mode === 'navigate')", script)
+        self.assertIn("new Response('Offline - reconnect to open this page.'", script)
+        self.assertIn("status: 503", script)
+        self.assertIn("'Content-Type': 'text/plain'", script)
+        self.assertIn("return caches.match(req);", script)

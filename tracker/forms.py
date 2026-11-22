@@ -171,8 +171,9 @@ class DailySalesSheetForm(forms.Form):
     (``total - closing``) and every money figure are derived server side by
     :meth:`tracker.models.DailySale.save`.
 
-    Only products the shop stocks at a cost above zero appear on the sheet;
-    a row for a no-cost or unstocked product is rejected outright.
+    Only products the shop stocks appear on the sheet; a row for an unstocked
+    product is rejected outright. A product with opening stock greater than
+    zero must have a closing count before the sheet can be saved.
 
     One row exists per product per day, whatever created it: submitting again
     rewrites that day's row rather than appending, so a corrected count -- or a
@@ -227,9 +228,7 @@ class DailySalesSheetForm(forms.Form):
 
         stocked = {
             sp.product_id: sp
-            for sp in ShopProduct.objects.filter(
-                shop=self.shop, is_active=True, cost_price__gt=0
-            )
+            for sp in ShopProduct.objects.filter(shop=self.shop, is_active=True)
         }
         entries = {}
         entered = 0
@@ -254,21 +253,36 @@ class DailySalesSheetForm(forms.Form):
             total = self._parse(self.data.get(self.TOTAL_PREFIX + str(product_id)))
             closing = self._parse(self.data.get(self.CLOSING_PREFIX + str(product_id)))
 
-            # Opening stock is pre-filled on every row, so it never decides
-            # whether a product counts as entered: only the three stock boxes
-            # the manager actually types into do.
+            if product_id not in stocked:
+                self.add_error(None, "One of the products is not stocked by this shop.")
+                continue
+            label = str(stocked[product_id].product)
+
+            # A product that carried stock into today must be counted out today.
+            # The opening box is pre-filled, so it cannot be ignored just because
+            # the manager left the other boxes untouched.
+            effective_opening = opening
+            if effective_opening in (None, "bad"):
+                effective_opening = Decimal(
+                    str(self.openings.get(product_id, Decimal("0.00")))
+                )
+            if isinstance(effective_opening, Decimal) and effective_opening > 0 and closing is None:
+                self.add_error(
+                    None,
+                    f"{label}: closing stock is required because opening stock was "
+                    f"{effective_opening:f}.",
+                )
+                continue
+
+            # Only the three stock boxes the manager types into decide whether a
+            # row is entered; an opening of zero with no activity is fine.
             if additional is None and total is None and closing is None:
-                continue  # untouched row: nothing to record
+                continue
 
             entered += 1
             if entered > MAX_SHEET_ROWS:
                 self.add_error(None, "Too many products in one submission.")
                 break
-
-            if product_id not in stocked:
-                self.add_error(None, "One of the products is not stocked by this shop.")
-                continue
-            label = str(stocked[product_id].product)
 
             bad = [
                 name

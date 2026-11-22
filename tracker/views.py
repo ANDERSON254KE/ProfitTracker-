@@ -47,7 +47,6 @@ from .forms import (
 )
 from .mixins import (
     LoginRequiredMixin,
-    ManagerOwnerRequiredMixin,
     ManagerRequiredMixin,
     ManagerShopAccessMixin,
     OwnerRequiredMixin,
@@ -71,8 +70,6 @@ OWNER_TREND_DAYS = 7
 OWNER_CHART_DAYS = 30
 #: Products listed in the owner's "top products" chart.
 OWNER_TOP_PRODUCTS = 10
-#: Days spanned by a manager's dashboard trend chart.
-MANAGER_CHART_DAYS = 14
 #: Number of recent sale lines shown on a manager's dashboard.
 MANAGER_HISTORY_ROWS = 15
 #: Rows per page in a shop report's dated profit table.
@@ -352,29 +349,13 @@ class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
         sales = _shop_sales(shop)
 
         today_row = sales.filter(sale_date=today).aggregate(
-            profit=Sum("profit"), units=Sum("units_sold"), revenue=Sum("total_revenue")
+            units=Sum("units_sold"), revenue=Sum("total_revenue")
         )
-        context["today_profit"] = _money(today_row["profit"])
         context["today_units"] = _money(today_row["units"])
         context["today_revenue"] = _money(today_row["revenue"])
 
-        lifetime = sales.aggregate(profit=Sum("profit"), units=Sum("units_sold"))
-        context["total_profit"] = _money(lifetime["profit"])
+        lifetime = sales.aggregate(units=Sum("units_sold"))
         context["total_units"] = _money(lifetime["units"])
-
-        # Daily profit chart for the manager's own shop, last 14 days.
-        trend_start = today - timedelta(days=MANAGER_CHART_DAYS - 1)
-        days = [trend_start + timedelta(days=i) for i in range(MANAGER_CHART_DAYS)]
-        per_day = {
-            row["sale_date"]: _money(row["profit"])
-            for row in sales.filter(sale_date__gte=trend_start)
-            .values("sale_date")
-            .annotate(profit=Sum("profit"))
-        }
-        context["trend"] = {
-            "labels": [day.strftime("%d %b") for day in days],
-            "values": [float(per_day.get(day, Decimal("0.00"))) for day in days],
-        }
 
         context["recent_sales"] = sales.order_by("-sale_date", "-id")[:MANAGER_HISTORY_ROWS]
         context["sale_form_url"] = reverse("daily_sales_sheet")
@@ -399,17 +380,14 @@ class DailySaleCreateView(LoginRequiredMixin, ManagerShopAccessMixin, CreateView
         return kwargs
 
     def form_valid(self, form):
-        """Stamp the recorder, save, and confirm the server-calculated profit."""
-        # Set before saving: the form only covers product and quantity, and
-        # recorded_by is not a client-supplied field.
+        """Stamp the recorder, save, and confirm the recorded sale."""
         form.instance.recorded_by = self.request.user
         response = super().form_valid(form)
         sale = self.object
         _save_shop_daily_profit(self.shop, sale.sale_date, self.request.user, create=False)
         messages.success(
             self.request,
-            f"Recorded {sale.units_sold} x {sale.product} at {self.shop.name}. "
-            f"Profit: {CURRENCY} {sale.profit:,.2f}.",
+            f"Recorded {sale.units_sold} x {sale.product} at {self.shop.name}.",
         )
         return response
 
@@ -441,9 +419,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         today = timezone.localdate()
 
         price_card = list(
-            ShopProduct.objects.filter(
-                shop=shop, is_active=True, cost_price__gt=0
-            )
+            ShopProduct.objects.filter(shop=shop, is_active=True)
             .select_related("product")
             .order_by("product__name", "product__category")
         )
@@ -513,11 +489,20 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             units=Sum("units_sold"),
         )
 
-        # Cash side of the same day: the manager enters M-Pesa and the bills;
-        # total sales and the cash left over are derived here.
+        # Cash side of the same day: the manager enters M-Pesa, expenses and the
+        # bills; total sales, cash and the balance carried forward are derived.
         cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=today).first()
         mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
+        bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
+        bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
         total_sales = _money(day["revenue"])
+        expense_total = _money(
+            ShopExpense.objects.filter(shop=shop, expense_date=today).aggregate(
+                amount=Sum("amount")
+            )["amount"]
+        )
+        cash = total_sales - mpesa
+        balance = cash - expense_total - bill_out + bill_paid
 
         # Filter chips, in sheet order (250ml ... soda) with a row count each.
         section_counts = {}
@@ -541,10 +526,13 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
             "cash_record": cash_record,
             "cash_mpesa": str(mpesa) if cash_record else "",
-            "cash_bill_out": str(cash_record.bill_out) if cash_record else "",
-            "cash_bill_paid": str(cash_record.bill_paid) if cash_record else "",
+            "cash_bill_out": str(bill_out) if cash_record else "",
+            "cash_bill_paid": str(bill_paid) if cash_record else "",
+            "cash_expenses": str(expense_total) if expense_total else "",
             "cash_total_sales": total_sales,
-            "cash_cash": _money(total_sales - mpesa),
+            "cash_cash": cash,
+            "cash_expense_total": expense_total,
+            "cash_balance": balance.quantize(Decimal("0.01")),
         }
 
     def get(self, request, *args, **kwargs):
@@ -561,7 +549,27 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             day=context["today"],
         )
         cash_form = ShopDailyCashForm(request.POST)
-        if not form.is_valid() or not cash_form.is_valid():
+        raw_expenses = request.POST.get("expenses")
+        expense_amount = Decimal("0.00")
+        expense_errors = []
+        if raw_expenses is not None and str(raw_expenses).strip():
+            try:
+                candidate = Decimal(str(raw_expenses).strip())
+            except (InvalidOperation, ValueError):
+                candidate = None
+            if (
+                candidate is None
+                or not candidate.is_finite()
+                or candidate < 0
+                or candidate > Decimal("999999999999.99")
+                or candidate.as_tuple().exponent < -2
+            ):
+                expense_errors.append(
+                    "Expenses: enter a non-negative amount with up to two decimal places."
+                )
+            else:
+                expense_amount = candidate
+        if not form.is_valid() or not cash_form.is_valid() or expense_errors:
             # Keep whatever the user typed so a rejected row can be fixed in place.
             for row in context["rows"]:
                 key = row["product"].pk
@@ -578,6 +586,21 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             for field, field_errors in cash_form.errors.items():
                 label = field.replace("_", " ").capitalize()
                 errors.extend(f"{label}: {error}" for error in field_errors)
+            errors.extend(expense_errors)
+            if raw_expenses is not None:
+                context["cash_expenses"] = raw_expenses
+                raw = str(raw_expenses).strip()
+                if raw:
+                    try:
+                        parsed = Decimal(raw)
+                        if parsed.is_finite():
+                            context["cash_expense_total"] = parsed
+                            cash_now = context["cash_cash"] - parsed - (
+                                cash_form.cleaned_data.get("bill_out") or Decimal("0.00")
+                            ) + (cash_form.cleaned_data.get("bill_paid") or Decimal("0.00"))
+                            context["cash_balance"] = cash_now.quantize(Decimal("0.01"))
+                    except (InvalidOperation, ValueError):
+                        pass
             context["form_errors"] = errors
             context["form_warnings"] = form.warnings
             return self.render_to_response(context, status=400)
@@ -595,9 +618,32 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             },
         )
 
+        if raw_expenses is not None:
+            existing_expenses = list(
+                ShopExpense.objects.filter(
+                    shop=self.shop, expense_date=context["today"]
+                ).order_by("pk")
+            )
+            if existing_expenses:
+                first = existing_expenses[0]
+                first.amount = expense_amount
+                first.description = "Daily expenses"
+                first.save(update_fields=["amount", "description"])
+                for extra in existing_expenses[1:]:
+                    extra.amount = Decimal("0.00")
+                    extra.save(update_fields=["amount"])
+            elif expense_amount > 0:
+                ShopExpense.objects.create(
+                    shop=self.shop,
+                    expense_date=context["today"],
+                    description="Daily expenses",
+                    amount=expense_amount,
+                    recorded_by=request.user,
+                )
+
         sales = form.save(request.user)
-        if sales:
-            _save_shop_daily_profit(self.shop, timezone.localdate(), request.user, create=False)
+        if sales or raw_expenses is not None:
+            _save_shop_daily_profit(self.shop, context["today"], request.user, create=False)
         for warning in form.warnings:
             messages.warning(request, warning)
 
@@ -622,7 +668,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         return redirect("daily_sales_sheet")
 
 
-class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateView):
+class ShopProfitSheetView(OwnerRequiredMixin, ManagerShopAccessMixin, TemplateView):
     """Record one shop's daily product quantities and expenses."""
 
     template_name = "tracker/shop_profit_sheet.html"
@@ -648,10 +694,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
         expense_start = expense_end = day
         expense_dates = [day]
         cards = ShopProduct.objects.filter(
-            shop=self.shop, is_active=True, cost_price__gt=0
-        ).select_related("product").order_by("product__name", "product__category")
-        unpriced_products = ShopProduct.objects.filter(
-            shop=self.shop, is_active=True, cost_price__lte=0
+            shop=self.shop, is_active=True
         ).select_related("product").order_by("product__name", "product__category")
         # Every non-stock row for the day is prefilled, not only this sheet's
         # own entries: a legacy single sale for the same product and day would
@@ -738,7 +781,6 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             "selected_date": day.isoformat(),
             "rows": rows,
             "category_groups": category_groups,
-            "unpriced_products": list(unpriced_products),
             "expenses": expenses,
             "expense_start": expense_start.isoformat(),
             "expense_end": expense_end.isoformat(),
@@ -807,7 +849,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 entries.append((expense_day, amount))
 
             cards = list(ShopProduct.objects.filter(
-                shop=self.shop, is_active=True, cost_price__gt=0
+                shop=self.shop, is_active=True
             ).select_related("product"))
             # Any non-stock row for the day is updated in place, so re-entering
             # units replaces the day's figure instead of adding a second row.
@@ -910,6 +952,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
                 redirect_url
             )
 
+
         if action == "add_expense":
             description = request.POST.get("description", "").strip()
             try:
@@ -956,7 +999,7 @@ class ShopProfitSheetView(LoginRequiredMixin, ManagerShopAccessMixin, TemplateVi
             return redirect(redirect_url)
 
         cards = list(ShopProduct.objects.filter(
-            shop=self.shop, is_active=True, cost_price__gt=0
+            shop=self.shop, is_active=True
         ).select_related("product"))
         # Any non-stock row for the day is updated in place, so re-entering
         # units replaces the day's figure instead of adding a second row.
@@ -1090,8 +1133,24 @@ class ShopPricingView(OwnerRequiredMixin, View):
         new_category = (request.POST.get("new_product_category") or "").strip()
         if new_name:
             try:
-                MasterProduct.objects.create(name=new_name, category=new_category)
-                messages.success(request, f"Added product '{new_name}'.")
+                with transaction.atomic():
+                    product = MasterProduct.objects.create(
+                        name=new_name, category=new_category
+                    )
+                    ShopProduct.objects.bulk_create([
+                        ShopProduct(
+                            shop=shop,
+                            product=product,
+                            cost_price=Decimal("0.00"),
+                            selling_price=Decimal("0.00"),
+                            is_active=True,
+                        )
+                        for shop in Shop.objects.all()
+                    ])
+                messages.success(
+                    request,
+                    f"Added product '{new_name}' to every shop's sheet. Set its prices on each shop card.",
+                )
                 product_updates += 1
             except Exception:
                 messages.error(
@@ -1165,15 +1224,10 @@ class ShopPricingView(OwnerRequiredMixin, View):
 
 
 class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
-    """Return the cost/selling price of a product for the requesting shop.
-
-    Used by ``daily_sale_form.html`` to live-preview profit in the browser.
-    The lookup is scoped to the manager's own shop, so it can only ever
-    disclose prices the manager is already entitled to see.
-    """
+    """Return the selling price of a product for the requesting shop."""
 
     def get(self, request, product_id, *args, **kwargs):
-        """Return ``{cost_price, selling_price}`` as JSON."""
+        """Return ``{selling_price}`` as JSON."""
         shop_product = (
             ShopProduct.objects.filter(shop=self.shop, product_id=product_id)
             .select_related("product")
@@ -1187,7 +1241,6 @@ class ShopProductPriceAPIView(LoginRequiredMixin, ManagerShopAccessMixin, View):
         return JsonResponse(
             {
                 "product": str(shop_product.product),
-                "cost_price": str(shop_product.cost_price),
                 "selling_price": str(shop_product.selling_price),
             }
         )
@@ -1852,7 +1905,7 @@ def _all_shops_profit_date_range(request):
     return start_date, end_date
 
 
-class ProductReportView(ManagerOwnerRequiredMixin, TemplateView):
+class ProductReportView(OwnerRequiredMixin, TemplateView):
     """Date-filtered report: every product, one profit column per shop.
 
     Complements :class:`ProductComparisonView`, which compares up to five
@@ -2633,7 +2686,7 @@ def pwa_manifest(request):
 
 def pwa_service_worker(request):
     js = """
-const CACHE_NAME = 'empire-v1';
+const CACHE_NAME = 'empire-v2';
 const SHELL = ['/'];
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(SHELL)));
@@ -2652,10 +2705,21 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   event.respondWith(
     fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
+      const type = res.headers.get('content-type') || '';
+      if (res.ok && req.mode !== 'navigate' && !type.includes('text/html')) {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
+      }
       return res;
-    }).catch(() => caches.match(req).then((r) => r || caches.match('/')))
+    }).catch(() => {
+      if (req.mode === 'navigate') {
+        return new Response('Offline - reconnect to open this page.', {
+          status: 503,
+          headers: {'Content-Type': 'text/plain'}
+        });
+      }
+      return caches.match(req);
+    })
   );
 });
 """

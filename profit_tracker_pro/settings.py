@@ -12,6 +12,24 @@ SECRET_KEY = 'django-insecure-your-secret-key-here'
 ALLOWED_HOSTS = ['*']
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
+# Vercel terminates TLS and forwards the browser's scheme in X-Forwarded-Proto.
+# Without this, request.is_secure() is False during a POST and Django's CSRF
+# origin check rejects the real https:// Origin as a mismatch.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Django 4+ compares the Origin header of unsafe requests against these hosts.
+# Add the production domain plus preview deployments so form posts work there.
+CSRF_TRUSTED_ORIGINS = [
+    'https://profit-tracker-silk.vercel.app',
+    'https://*.vercel.app',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+]
+
+if os.environ.get('VERCEL'):
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = True
+
 INSTALLED_APPS = [
     'jazzmin',
     'django.contrib.admin',

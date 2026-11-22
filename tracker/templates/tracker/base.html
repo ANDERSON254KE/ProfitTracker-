@@ -120,12 +120,6 @@
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'daily_sale_create' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
                             Record Sale
                         </a>
-                        {% if user.assigned_shop %}
-                        <a href="{% url 'shop_profit_sheet' user.assigned_shop.pk %}"
-                           class="text-sm font-medium {% if request.resolver_match.url_name == 'shop_profit_sheet' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
-                            Profit Sheet
-                        </a>
-                        {% endif %}
                     {% endif %}
                 {% endif %}
             </div>
@@ -168,9 +162,6 @@
         {% else %}
         <a href="{% url 'manager_dashboard' %}" class="py-1 text-sm font-medium hover:text-indigo-300">My Shop</a>
         <a href="{% url 'daily_sale_create' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Record Sale</a>
-        {% if user.assigned_shop %}
-        <a href="{% url 'shop_profit_sheet' user.assigned_shop.pk %}" class="py-1 text-sm font-medium text-indigo-300">Profit Sheet</a>
-        {% endif %}
         {% endif %}
     </div>
 </nav>
@@ -191,7 +182,7 @@
 </main>
 
 <footer class="mx-auto max-w-7xl px-4 pb-8 text-center text-xs text-slate-400">
-    Profit amounts are calculated on the server and locked in at the time of sale.
+    Figures are calculated on the server and locked in at the time of sale.
 </footer>
 
 {% block scripts %}{% endblock %}

@@ -35,8 +35,7 @@
 
 {% if not has_products %}
     <div class="rounded-md border border-zinc-200 bg-white px-3 py-6 text-sm text-zinc-500">
-        This shop has no active products yet. Ask the owner to add pricing for this branch first:
-        products with no cost price are not shown here until the owner prices them.
+        This shop has no active products yet. Ask the owner to add a product from the Common sheet first.
     </div>
 {% else %}
 <form method="post" action="{% url 'daily_sales_sheet' %}" id="sales-sheet">
@@ -99,6 +98,7 @@
                             <p class="truncate text-sm font-medium text-zinc-900">{{ row.product.name }}</p>
                             <p class="mt-0.5 truncate text-[11px] text-zinc-500">
                                 {{ row.section }} · {{ row.price|ksh }}
+                                {% if row.price == 0 %}<span class="text-amber-600">· needs pricing</span>{% endif %}
                                 {% if row.entry %}<span class="text-emerald-600">· saved</span>{% endif %}
                             </p>
                         </div>
@@ -146,7 +146,7 @@
                 <p class="text-[10px] font-medium uppercase tracking-wide text-zinc-500">Cash reconciliation</p>
                 <p class="text-[10px] text-zinc-400">Total sales and cash are worked out for you</p>
             </div>
-            <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                 <label class="block min-w-0">
                     <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Total sales</span>
                     <input id="cash-total-sales" type="text" readonly tabindex="-1"
@@ -166,6 +166,12 @@
                            class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
                 </label>
                 <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Expenses</span>
+                    <input id="cash-expenses" name="expenses" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_expenses }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0">
                     <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Bill out</span>
                     <input id="cash-bill-out" name="bill_out" type="number" inputmode="decimal" min="0" step="0.01"
                            value="{{ cash_bill_out }}" placeholder="0"
@@ -177,7 +183,14 @@
                            value="{{ cash_bill_paid }}" placeholder="0"
                            class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
                 </label>
+                <label class="block min-w-0 sm:col-span-3 lg:col-span-6">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-emerald-700">Balance carried forward</span>
+                    <input id="cash-balance" type="text" readonly tabindex="-1"
+                           value="{{ cash_balance|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-right text-sm font-semibold tabular-nums text-emerald-800">
+                </label>
             </div>
+            <p class="mt-1.5 text-[10px] text-zinc-500">Balance = cash − expenses − bill out + bill paid.</p>
         </div>
 
         <div class="flex flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
@@ -195,8 +208,9 @@
 
     <p class="mt-2 text-xs text-zinc-500">
         Opening stock defaults to yesterday's closing stock and can be corrected. Enter stock received
-        and today's closing count — sold units and the amount are worked out for you. Leave a row blank
-        if the product had no activity. Products with no cost price are not shown here until the owner prices them.
+        and today's closing count — sold units and the amount are worked out for you. A product with
+        opening stock must have a closing count. New products appear immediately and are marked
+        “needs pricing” until the owner sets their prices.
     </p>
 </form>
 
@@ -246,10 +260,13 @@
 
                 closeInput.classList.remove(...badClass);
 
-                // A row counts as filled in once a stock movement is typed; the
-                // opening box is pre-filled so it never marks a row by itself.
                 if (add === null && closing === null) {
-                    setRevenue(row, "—");
+                    if (opening > 0) {
+                        closeInput.classList.add(...badClass);
+                        setRevenue(row, "…");
+                    } else {
+                        setRevenue(row, "—");
+                    }
                     return;
                 }
                 if (closing === null) {
@@ -283,19 +300,29 @@
             updateCash(newAmount);
         }
 
-        const mpesaInput = document.getElementById("cash-mpesa");
+        const cashInputs = {
+            mpesa: document.getElementById("cash-mpesa"),
+            expenses: document.getElementById("cash-expenses"),
+            billOut: document.getElementById("cash-bill-out"),
+            billPaid: document.getElementById("cash-bill-paid")
+        };
 
-        // Total sales come from the product rows; cash is whatever the day took
-        // after the M-Pesa share is taken out. Both stay read-only.
         function updateCash(total) {
             const totalEl = document.getElementById("cash-total-sales");
             const cashEl = document.getElementById("cash-cash");
-            if (!totalEl || !cashEl) return;
-            const mpesa = mpesaInput && mpesaInput.value !== ""
-                ? (parseFloat(mpesaInput.value) || 0)
-                : 0;
+            const balanceEl = document.getElementById("cash-balance");
+            if (!totalEl || !cashEl || !balanceEl) return;
+            const value = function (el) {
+                return el && el.value !== "" ? (parseFloat(el.value) || 0) : 0;
+            };
+            const mpesa = value(cashInputs.mpesa);
+            const expenses = value(cashInputs.expenses);
+            const billOut = value(cashInputs.billOut);
+            const billPaid = value(cashInputs.billPaid);
+            const cash = total - mpesa;
             totalEl.value = "KSh " + money.format(total);
-            cashEl.value = "KSh " + money.format(total - mpesa);
+            cashEl.value = "KSh " + money.format(cash);
+            balanceEl.value = "KSh " + money.format(cash - expenses - billOut + billPaid);
         }
 
         function setChip(chip, on) {
@@ -339,10 +366,13 @@
             input.addEventListener("change", update);
         });
 
-        if (mpesaInput) {
-            mpesaInput.addEventListener("input", update);
-            mpesaInput.addEventListener("change", update);
-        }
+        Object.keys(cashInputs).forEach(function (key) {
+            const input = cashInputs[key];
+            if (input) {
+                input.addEventListener("input", update);
+                input.addEventListener("change", update);
+            }
+        });
 
         applyFilter();
         update();
