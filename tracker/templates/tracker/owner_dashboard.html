@@ -58,6 +58,51 @@
     {% endfor %}
 </div>
 
+{# ---- Stock given out today ---- #}
+<section class="mt-6 rounded-xl bg-white p-5 shadow">
+    <div class="flex flex-wrap items-baseline justify-between gap-1">
+        <h2 class="text-base font-semibold text-slate-900">Today's sales</h2>
+        <p class="text-xs text-slate-500">Stock added and goods given out by your managers</p>
+    </div>
+    <div class="mt-3 overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-4 py-2.5 text-left font-semibold">Shop</th>
+                    <th class="px-4 py-2.5 text-left font-semibold">Product</th>
+                    <th class="px-4 py-2.5 text-right font-semibold">Stock in</th>
+                    <th class="px-4 py-2.5 text-right font-semibold">Given out</th>
+                    <th class="px-4 py-2.5 text-left font-semibold">To who?</th>
+                    <th class="px-4 py-2.5 text-right font-semibold">Sales</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for sale in today_sales %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="whitespace-nowrap px-4 py-2.5 text-slate-700">{{ sale.shop.name }}</td>
+                        <td class="px-4 py-2.5 font-medium text-slate-900">{{ sale.product.name }}</td>
+                        <td class="px-4 py-2.5 text-right tabular-nums text-slate-700">
+                            {{ sale.additional_stock|default:0|units }}
+                        </td>
+                        <td class="px-4 py-2.5 text-right font-medium tabular-nums
+                                   {% if sale.given_out %}text-rose-600{% else %}text-slate-400{% endif %}">
+                            {% if sale.given_out %}{{ sale.given_out|units }}{% else %}—{% endif %}
+                        </td>
+                        <td class="px-4 py-2.5 text-slate-600">{{ sale.stock_note|default:"—" }}</td>
+                        <td class="px-4 py-2.5 text-right tabular-nums text-slate-700">{{ sale.total_revenue|ksh }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="6" class="px-4 py-6 text-center text-slate-500">
+                            No sales recorded today yet.
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
 {# ---- Summary cards ---- #}
 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
     <div class="rounded-xl bg-white p-5 shadow">

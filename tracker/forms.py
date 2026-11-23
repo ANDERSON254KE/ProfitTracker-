@@ -167,8 +167,10 @@ class DailySalesSheetForm(forms.Form):
     stock defaults to ``openings`` (the previous day's closing stock) and is
     only taken from the browser when the manager overrides it. Total stock is
     ``opening + additional``; a ``total_`` value is still accepted for older
-    clients but is not required. Only stock figures cross the wire; units sold
-    (``total - closing``) and every money figure are derived server side by
+    clients but is not required. Additional stock may be negative, meaning the
+    manager gave products out; a ``note_`` value records who received them.
+    Only stock figures cross the wire; units sold (``total - closing``) and
+    every money figure are derived server side by
     :meth:`tracker.models.DailySale.save`.
 
     Only products the shop stocks appear on the sheet; a row for an unstocked
@@ -186,6 +188,7 @@ class DailySalesSheetForm(forms.Form):
     ADDITIONAL_PREFIX = "add_"
     TOTAL_PREFIX = "total_"
     CLOSING_PREFIX = "close_"
+    NOTE_PREFIX = "note_"
 
     def __init__(self, *args, shop=None, openings=None, day=None, **kwargs):
         """Scope the sheet to ``shop``'s active range.
@@ -202,15 +205,19 @@ class DailySalesSheetForm(forms.Form):
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def _parse(raw):
-        """Return a non-negative Decimal, ``None`` for blank, or ``'bad'``."""
+    def _parse(raw, allow_negative=False):
+        """Return a Decimal, ``None`` for blank, or ``'bad'``.
+
+        Additional stock allows negatives: a negative value records products
+        given out that day. Counts and totals stay non-negative.
+        """
         if raw is None or not str(raw).strip():
             return None
         try:
             value = Decimal(str(raw).strip())
         except (InvalidOperation, TypeError, ValueError):
             return "bad"
-        if value < 0:
+        if value < 0 and not allow_negative:
             return "bad"
         return value
 
@@ -229,6 +236,7 @@ class DailySalesSheetForm(forms.Form):
         stocked = {
             sp.product_id: sp
             for sp in ShopProduct.objects.filter(shop=self.shop, is_active=True)
+            .select_related("product")
         }
         entries = {}
         entered = 0
@@ -249,7 +257,10 @@ class DailySalesSheetForm(forms.Form):
 
         for product_id in sorted(product_ids):
             opening = self._parse(self.data.get(self.OPENING_PREFIX + str(product_id)))
-            additional = self._parse(self.data.get(self.ADDITIONAL_PREFIX + str(product_id)))
+            additional = self._parse(
+                self.data.get(self.ADDITIONAL_PREFIX + str(product_id)),
+                allow_negative=True,
+            )
             total = self._parse(self.data.get(self.TOTAL_PREFIX + str(product_id)))
             closing = self._parse(self.data.get(self.CLOSING_PREFIX + str(product_id)))
 
@@ -295,7 +306,11 @@ class DailySalesSheetForm(forms.Form):
                 if value == "bad"
             ]
             if bad:
-                self.add_error(None, f"{label}: enter a positive number for {', '.join(bad)}.")
+                self.add_error(
+                    None,
+                    f"{label}: enter a valid number for {', '.join(bad)} "
+                    "(only additional stock may be negative, for goods given out).",
+                )
                 continue
 
             if closing is None:
@@ -317,6 +332,14 @@ class DailySalesSheetForm(forms.Form):
             if total is None:
                 total = opening + additional
 
+            if total < 0:
+                self.add_error(
+                    None,
+                    f"{label}: total stock cannot be negative "
+                    f"({opening:f} + {additional:f} = {total:f}).",
+                )
+                continue
+
             if closing > total:
                 self.add_error(
                     None,
@@ -336,11 +359,15 @@ class DailySalesSheetForm(forms.Form):
                         f"{opening + additional:f}. Saved anyway -- double-check the count."
                     )
 
+            note = (self.data.get(self.NOTE_PREFIX + str(product_id)) or "").strip()
             entries[product_id] = {
                 "opening": opening,
                 "additional": additional,
                 "total": total,
                 "closing": closing,
+                "note": note[:200],
+                "cost": stocked[product_id].cost_price,
+                "price": stocked[product_id].selling_price,
             }
 
         cleaned["entries"] = entries
@@ -387,6 +414,9 @@ class DailySalesSheetForm(forms.Form):
             sale.additional_stock = figures["additional"]
             sale.total_stock = figures["total"]
             sale.closing_stock = figures["closing"]
+            sale.stock_note = figures["note"]
+            sale.unit_cost_at_sale = figures["cost"]
+            sale.unit_price_at_sale = figures["price"]
             return sale
 
         saved = []

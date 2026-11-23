@@ -23,6 +23,15 @@
     </div>
 {% else %}
 
+    {# ---- Today's sheet: the main thing a manager opens this page to fill ---- #}
+    <section class="mt-5">
+        <div class="mb-2 flex flex-wrap items-baseline justify-between gap-1">
+            <h2 class="text-base font-semibold text-slate-900">Today's daily sheet</h2>
+            <p class="text-xs text-slate-500">Fill this before you close the shop.</p>
+        </div>
+        {% include "tracker/_daily_sheet_form.html" %}
+    </section>
+
     {# ---- Recent sales ---- #}
     <div class="mt-6 rounded-xl bg-white shadow">
         <div class="border-b border-slate-200 px-5 py-4">

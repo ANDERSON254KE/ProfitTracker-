@@ -1,0 +1,461 @@
+{% load money %}
+{% if form_errors %}
+    <div class="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">
+        <p class="font-medium">The day was not saved:</p>
+        <ul class="mt-1 list-inside list-disc space-y-0.5">
+            {% for error in form_errors %}<li>{{ error }}</li>{% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+{% if form_warnings %}
+    <div class="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+        <p class="font-medium">Check these counts:</p>
+        <ul class="mt-1 list-inside list-disc space-y-0.5">
+            {% for warning in form_warnings %}<li>{{ warning }}</li>{% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
+{% if not has_products %}
+    <div class="rounded-md border border-zinc-200 bg-white px-3 py-6 text-sm text-zinc-500">
+        This shop has no active products yet. Ask the owner to add a product from the Common sheet first.
+    </div>
+{% else %}
+<form method="post" action="{% url 'daily_sales_sheet' %}" id="sales-sheet">
+    {% csrf_token %}
+    <div class="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+
+        {# Toolbar: search + one chip per size section #}
+        <div class="border-b border-zinc-200 px-3 py-2.5">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="relative flex-1 sm:max-w-xs">
+                    <svg class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+                         fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="11" cy="11" r="7"></circle>
+                        <path d="m20 20-3.5-3.5" stroke-linecap="round"></path>
+                    </svg>
+                    <input id="product-search" type="search" autocomplete="off" placeholder="Search products…"
+                           aria-label="Search products"
+                           class="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-8 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </div>
+                <p class="text-xs text-zinc-500 sm:ml-auto">
+                    <span id="visible-count">{{ rows|length }}</span> of {{ rows|length }} products
+                </p>
+            </div>
+
+            <div class="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" role="group" aria-label="Filter by section">
+                <button type="button" data-section-filter="all"
+                        class="section-chip shrink-0 rounded-md border border-zinc-900 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800"
+                        aria-pressed="true">
+                    All <span class="text-zinc-400">{{ rows|length }}</span>
+                </button>
+                {% for section in sections %}
+                    <button type="button" data-section-filter="{{ section.name }}"
+                            class="section-chip shrink-0 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50"
+                            aria-pressed="false">
+                        {{ section.name }} <span class="text-zinc-400">{{ section.count }}</span>
+                    </button>
+                {% endfor %}
+            </div>
+        </div>
+
+        {# Column headings, desktop only #}
+        <div class="hidden items-center gap-2 border-b border-zinc-200 bg-zinc-50 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500 sm:grid sm:grid-cols-[minmax(0,2.1fr)_repeat(3,minmax(0,1fr))_minmax(0,1fr)]">
+            <div>Product</div>
+            <div class="text-right">Opening</div>
+            <div class="text-right">Add</div>
+            <div class="text-right">Closing</div>
+            <div class="text-right">Amount</div>
+        </div>
+
+        <div id="sheet-rows" class="divide-y divide-zinc-100">
+            {% for row in rows %}
+                <div class="sheet-row px-3 py-2.5 sm:grid sm:grid-cols-[minmax(0,2.1fr)_repeat(3,minmax(0,1fr))_minmax(0,1fr)] sm:items-center sm:gap-2 sm:px-3 sm:py-2"
+                     data-section="{{ row.section }}"
+                     data-search="{{ row.product.name|lower }} {{ row.product.category|lower }}"
+                     data-price="{{ row.price }}"
+                     data-opening="{{ row.opening }}">
+
+                    <div class="flex items-start justify-between gap-3 sm:block">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-medium text-zinc-900">{{ row.product.name }}</p>
+                            <p class="mt-0.5 truncate text-[11px] text-zinc-500">
+                                {{ row.section }} · {{ row.price|ksh }}
+                                {% if row.price == 0 %}<span class="text-amber-600">· needs pricing</span>{% endif %}
+                                {% if row.entry %}<span class="text-emerald-600">· saved</span>{% endif %}
+                            </p>
+                        </div>
+                        <p class="shrink-0 text-sm font-semibold tabular-nums text-zinc-700 sm:hidden">
+                            <span class="row-revenue">{% if row.entry %}{{ row.amount|ksh }}{% else %}—{% endif %}</span>
+                        </p>
+                    </div>
+
+                    <div class="mt-2 grid grid-cols-3 gap-2 sm:mt-0 sm:contents">
+                        <label class="block min-w-0">
+                            <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500 sm:hidden">Opening</span>
+                            <input type="number" name="open_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                   value="{{ row.opening_input }}" placeholder="0"
+                                   title="Yesterday's closing stock"
+                                   class="in-open stock-input h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                        </label>
+                        <div class="min-w-0">
+                            <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500 sm:hidden">Add</span>
+                            <input type="number" name="add_{{ row.product.pk }}" inputmode="decimal" step="any"
+                                   value="{{ row.additional_input }}" placeholder="0"
+                                   title="Negative means goods given out"
+                                   class="in-add stock-input h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                            <input type="text" name="note_{{ row.product.pk }}" value="{{ row.note_input }}"
+                                   placeholder="To who? (if given out)" maxlength="200"
+                                   class="mt-1 h-7 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-2 text-[11px] text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                        </div>
+                        <label class="block min-w-0">
+                            <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500 sm:hidden">Closing</span>
+                            <input type="number" name="close_{{ row.product.pk }}" inputmode="decimal" min="0" step="any"
+                                   value="{{ row.closing_input }}" placeholder="0"
+                                   class="in-close stock-input h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                        </label>
+                    </div>
+
+                    <div class="hidden text-right text-sm font-medium tabular-nums text-zinc-700 sm:block">
+                        <span class="row-revenue">{% if row.entry %}{{ row.amount|ksh }}{% else %}—{% endif %}</span>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
+        <div id="no-results" class="hidden px-3 py-8 text-center text-sm text-zinc-500">
+            No products match your search.
+        </div>
+
+        {# Cash side of the same day: total sales and cash are derived. #}
+        <div class="border-t border-zinc-200 bg-white px-3 py-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-1">
+                <p class="text-[10px] font-medium uppercase tracking-wide text-zinc-500">Cash reconciliation</p>
+                <p class="text-[10px] text-zinc-400">Total sales, expenses and cash are worked out for you</p>
+            </div>
+            <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Total sales</span>
+                    <input id="cash-total-sales" type="text" readonly tabindex="-1"
+                           value="{{ cash_total_sales|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">M-Pesa</span>
+                    <input id="cash-mpesa" name="mpesa" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_mpesa }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Cash</span>
+                    <input id="cash-cash" type="text" readonly tabindex="-1"
+                           value="{{ cash_cash|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Expenses</span>
+                    <input id="cash-expenses" type="text" readonly tabindex="-1"
+                           value="{{ cash_expenses|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-100 px-2 text-right text-sm tabular-nums text-zinc-700">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Bill out</span>
+                    <input id="cash-bill-out" name="bill_out" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_bill_out }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500">Bill paid</span>
+                    <input id="cash-bill-paid" name="bill_paid" type="number" inputmode="decimal" min="0" step="0.01"
+                           value="{{ cash_bill_paid }}" placeholder="0"
+                           class="h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                </label>
+                <label class="block min-w-0 sm:col-span-3 lg:col-span-6">
+                    <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-emerald-700">Balance carried forward</span>
+                    <input id="cash-balance" type="text" readonly tabindex="-1"
+                           value="{{ cash_balance|ksh }}"
+                           class="h-9 w-full min-w-0 rounded-md border border-emerald-200 bg-emerald-50 px-2 text-right text-sm font-semibold tabular-nums text-emerald-800">
+                </label>
+            </div>
+
+            <div class="mt-3 border-t border-zinc-100 pt-2">
+                <p class="text-[10px] font-medium uppercase tracking-wide text-zinc-500">Expenses this day</p>
+                <div id="expense-rows" class="mt-1.5">
+                    {% for expense in expense_rows %}
+                    <div class="expense-row mb-1.5 flex items-center gap-2">
+                        <input type="text" name="expense_description" value="{{ expense.description }}" placeholder="e.g. Transport"
+                               class="h-8 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                        <input type="number" name="expense_amount" class="expense-amount h-8 w-24 rounded-md border border-zinc-200 bg-white px-2 text-right text-xs tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+                               inputmode="decimal" min="0" step="0.01" value="{{ expense.amount }}" placeholder="0">
+                        <button type="button" class="remove-expense h-8 w-8 shrink-0 rounded-md border border-zinc-200 bg-white text-zinc-500 hover:bg-rose-50 hover:text-rose-600" aria-label="Remove expense">×</button>
+                    </div>
+                    {% empty %}
+                    <div class="expense-row mb-1.5 flex items-center gap-2">
+                        <input type="text" name="expense_description" placeholder="e.g. Transport"
+                               class="h-8 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                        <input type="number" name="expense_amount" class="expense-amount h-8 w-24 rounded-md border border-zinc-200 bg-white px-2 text-right text-xs tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+                               inputmode="decimal" min="0" step="0.01" value="" placeholder="0">
+                        <button type="button" class="remove-expense h-8 w-8 shrink-0 rounded-md border border-zinc-200 bg-white text-zinc-500 hover:bg-rose-50 hover:text-rose-600" aria-label="Remove expense">×</button>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="button" id="add-expense"
+                        class="mt-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                    + Add expense
+                </button>
+                <input type="hidden" name="expenses" id="expenses-total" value="{{ cash_expenses }}">
+            </div>
+            <p class="mt-1.5 text-[10px] text-zinc-500">Balance = cash − total expenses − bill out + bill paid.</p>
+        </div>
+
+        <div class="flex flex-col gap-2 border-t border-zinc-200 bg-zinc-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <p class="text-xs text-zinc-600 sm:text-sm">
+                <span class="font-medium text-zinc-900"><span id="new-line-count">0</span> product(s)</span>
+                · <span id="new-units">0</span> unit(s) ·
+                <span id="new-amount" class="font-medium tabular-nums text-zinc-900">KSh 0.00</span>
+            </p>
+            <button type="submit"
+                    class="h-9 w-full rounded-md bg-zinc-900 px-4 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-900/20 sm:w-auto">
+                Save today's sheet
+            </button>
+        </div>
+    </div>
+
+    <p class="mt-2 text-xs text-zinc-500">
+        Opening stock defaults to yesterday's closing stock and can be corrected. Enter stock received
+        (a negative amount means goods given out — say who in “To who?”), then today's closing count;
+        sold units and the amount are worked out for you. New products appear immediately and are marked
+        “needs pricing” until the owner sets their prices.
+    </p>
+</form>
+
+<script>
+    (function () {
+        const form = document.getElementById("sales-sheet");
+        if (!form) return;
+
+        const money = new Intl.NumberFormat("en", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        const quantity = new Intl.NumberFormat("en", {maximumFractionDigits: 4});
+        const badClass = ["!border-rose-400", "!bg-rose-50"];
+
+        const rows = Array.from(form.querySelectorAll(".sheet-row"));
+        const searchInput = document.getElementById("product-search");
+        const chips = Array.from(form.querySelectorAll("[data-section-filter]"));
+        const emptyState = document.getElementById("no-results");
+        const visibleCount = document.getElementById("visible-count");
+        const expenseRows = document.getElementById("expense-rows");
+        const addExpenseButton = document.getElementById("add-expense");
+        const expensesTotal = document.getElementById("expenses-total");
+        const expensesDisplay = document.getElementById("cash-expenses");
+        const activeChip = ["border-zinc-900", "bg-zinc-900", "text-white", "hover:bg-zinc-800"];
+        const idleChip = ["border-zinc-200", "bg-white", "text-zinc-600", "hover:bg-zinc-50"];
+        let section = "all";
+
+        function num(el) {
+            if (!el || el.value === "") return null;
+            const value = parseFloat(el.value);
+            return isNaN(value) ? null : value;
+        }
+
+        function setRevenue(row, text) {
+            row.querySelectorAll(".row-revenue").forEach(function (el) {
+                el.textContent = text;
+            });
+        }
+
+        function syncExpenses() {
+            let total = 0;
+            if (expenseRows) {
+                expenseRows.querySelectorAll(".expense-amount").forEach(function (input) {
+                    const value = parseFloat(input.value);
+                    if (!isNaN(value)) total += value;
+                });
+            }
+            if (expensesTotal) expensesTotal.value = total.toFixed(2);
+            if (expensesDisplay) expensesDisplay.value = "KSh " + money.format(total);
+            return total;
+        }
+
+        function update() {
+            let newCount = 0, newUnits = 0, newAmount = 0;
+
+            rows.forEach(function (row) {
+                const openInput = row.querySelector(".in-open");
+                const addInput = row.querySelector(".in-add");
+                const closeInput = row.querySelector(".in-close");
+                const add = num(addInput);
+                const closing = num(closeInput);
+                const opening = openInput && openInput.value !== ""
+                    ? (parseFloat(openInput.value) || 0)
+                    : (parseFloat(row.dataset.opening) || 0);
+                const price = parseFloat(row.dataset.price) || 0;
+
+                closeInput.classList.remove(...badClass);
+
+                if (add === null && closing === null) {
+                    if (opening > 0) {
+                        closeInput.classList.add(...badClass);
+                        setRevenue(row, "…");
+                    } else {
+                        setRevenue(row, "—");
+                    }
+                    return;
+                }
+                if (closing === null) {
+                    setRevenue(row, "…");
+                    return;
+                }
+
+                const available = opening + (add || 0);
+                if (available < 0 || closing > available) {
+                    closeInput.classList.add(...badClass);
+                    setRevenue(row, "!");
+                    return;
+                }
+
+                const sold = available - closing;
+                const amount = sold * price;
+
+                setRevenue(row, "KSh " + money.format(amount));
+                newCount += 1;
+                newUnits += sold;
+                newAmount += amount;
+            });
+
+            const set = function (id, text) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = text;
+            };
+            set("new-line-count", String(newCount));
+            set("new-units", quantity.format(newUnits));
+            set("new-amount", "KSh " + money.format(newAmount));
+            syncExpenses();
+            updateCash(newAmount);
+        }
+
+        const cashInputs = {
+            mpesa: document.getElementById("cash-mpesa"),
+            expenses: expensesTotal,
+            billOut: document.getElementById("cash-bill-out"),
+            billPaid: document.getElementById("cash-bill-paid")
+        };
+
+        function updateCash(total) {
+            const totalEl = document.getElementById("cash-total-sales");
+            const cashEl = document.getElementById("cash-cash");
+            const balanceEl = document.getElementById("cash-balance");
+            if (!totalEl || !cashEl || !balanceEl) return;
+            const value = function (el) {
+                return el && el.value !== "" ? (parseFloat(el.value) || 0) : 0;
+            };
+            const mpesa = value(cashInputs.mpesa);
+            const expenses = value(cashInputs.expenses);
+            const billOut = value(cashInputs.billOut);
+            const billPaid = value(cashInputs.billPaid);
+            const cash = total - mpesa;
+            totalEl.value = "KSh " + money.format(total);
+            cashEl.value = "KSh " + money.format(cash);
+            balanceEl.value = "KSh " + money.format(cash - expenses - billOut + billPaid);
+        }
+
+        function setChip(chip, on) {
+            chip.classList.remove(...(on ? idleChip : activeChip));
+            chip.classList.add(...(on ? activeChip : idleChip));
+            chip.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+
+        function applyFilter() {
+            const term = (searchInput.value || "").trim().toLowerCase();
+            let shown = 0;
+
+            rows.forEach(function (row) {
+                const matchesTerm = !term || row.dataset.search.indexOf(term) !== -1;
+                const matchesSection = section === "all" || row.dataset.section === section;
+                const visible = matchesTerm && matchesSection;
+                row.style.display = visible ? "" : "none";
+                if (visible) shown += 1;
+            });
+
+            emptyState.classList.toggle("hidden", shown !== 0);
+            visibleCount.textContent = String(shown);
+        }
+
+        function makeExpenseRow() {
+            const row = document.createElement("div");
+            row.className = "expense-row mb-1.5 flex items-center gap-2";
+
+            const description = document.createElement("input");
+            description.type = "text";
+            description.name = "expense_description";
+            description.placeholder = "e.g. Transport";
+            description.className = "h-8 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10";
+
+            const amount = document.createElement("input");
+            amount.type = "number";
+            amount.name = "expense_amount";
+            amount.className = "expense-amount h-8 w-24 rounded-md border border-zinc-200 bg-white px-2 text-right text-xs tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10";
+            amount.inputMode = "decimal";
+            amount.step = "0.01";
+            amount.min = "0";
+            amount.placeholder = "0";
+
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "remove-expense h-8 w-8 shrink-0 rounded-md border border-zinc-200 bg-white text-zinc-500 hover:bg-rose-50 hover:text-rose-600";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", "Remove expense");
+
+            row.append(description, amount, remove);
+            return row;
+        }
+
+        searchInput.addEventListener("input", applyFilter);
+        searchInput.addEventListener("search", applyFilter);
+
+        chips.forEach(function (chip) {
+            chip.addEventListener("click", function () {
+                section = chip.dataset.sectionFilter;
+                chips.forEach(function (other) {
+                    setChip(other, other === chip);
+                });
+                applyFilter();
+            });
+        });
+
+        form.querySelectorAll("input.stock-input").forEach(function (input) {
+            input.addEventListener("input", update);
+            input.addEventListener("change", update);
+        });
+
+        Object.keys(cashInputs).forEach(function (key) {
+            const input = cashInputs[key];
+            if (input) {
+                input.addEventListener("input", update);
+                input.addEventListener("change", update);
+            }
+        });
+
+        if (expenseRows) {
+            expenseRows.addEventListener("input", update);
+            expenseRows.addEventListener("change", update);
+            expenseRows.addEventListener("click", function (event) {
+                if (!event.target.classList.contains("remove-expense")) return;
+                event.target.closest(".expense-row").remove();
+                update();
+            });
+        }
+        if (addExpenseButton && expenseRows) {
+            addExpenseButton.addEventListener("click", function () {
+                const row = makeExpenseRow();
+                expenseRows.appendChild(row);
+                row.querySelector('input[name="expense_description"]').focus();
+                update();
+            });
+        }
+
+        applyFilter();
+        update();
+    })();
+</script>
+{% endif %}

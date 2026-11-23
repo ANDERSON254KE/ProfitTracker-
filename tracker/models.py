@@ -25,6 +25,8 @@ from django.utils import timezone
 
 #: Every monetary amount is a non-negative two-decimal KSh value.
 MONEY_VALIDATORS = [MinValueValidator(Decimal("0.00"))]
+#: Additional stock may be negative: it records products given out that day.
+STOCK_MOVE_VALIDATORS = [MinValueValidator(Decimal("-999999999999.99"))]
 
 
 class LocalDateField(models.DateField):
@@ -225,7 +227,7 @@ class DailySale(models.Model):
         decimal_places=2,
         null=True,
         blank=True,
-        validators=MONEY_VALIDATORS,
+        validators=STOCK_MOVE_VALIDATORS,
     )
     total_stock = models.DecimalField(
         "Total Stock",
@@ -242,6 +244,9 @@ class DailySale(models.Model):
         null=True,
         blank=True,
         validators=MONEY_VALIDATORS,
+    )
+    stock_note = models.CharField(
+        "Stock Note", max_length=200, blank=True, default=""
     )
     unit_cost_at_sale = models.DecimalField(
         "Unit Cost at Sale", max_digits=12, decimal_places=2
@@ -296,6 +301,13 @@ class DailySale(models.Model):
         return (
             Decimal(self.total_stock or 0) - Decimal(self.closing_stock or 0)
         ).quantize(Decimal("0.01"))
+
+    @property
+    def given_out(self):
+        """Positive units given out when additional stock was entered negative."""
+        if self.additional_stock is not None and self.additional_stock < 0:
+            return (-self.additional_stock).quantize(Decimal("0.01"))
+        return None
 
     def clean(self) -> None:
         """Lock the sale's prices to the shop's current price card.

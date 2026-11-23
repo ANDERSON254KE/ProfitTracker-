@@ -141,6 +141,162 @@ def _input_value(value) -> str:
     return str(value)
 
 
+def _parse_money_input(raw, label):
+    """Parse one non-negative money input, returning ``(value, error)``."""
+    text = str(raw or "").strip()
+    if not text:
+        return Decimal("0.00"), None
+    try:
+        candidate = Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        candidate = None
+    if (
+        candidate is None
+        or not candidate.is_finite()
+        or candidate < 0
+        or candidate > Decimal("999999999999.99")
+        or candidate.as_tuple().exponent < -2
+    ):
+        return None, (
+            f"{label}: enter a non-negative amount with up to two decimal places."
+        )
+    return candidate, None
+
+
+def _daily_sheet_openings(shop, day):
+    """Return ``product_id -> last known closing stock`` before ``day``."""
+    openings = {}
+    history = (
+        DailySale.objects.filter(
+            shop=shop, sale_date__lt=day, closing_stock__isnull=False
+        )
+        .order_by("product_id", "-sale_date", "-id")
+        .values_list("product_id", "closing_stock")
+    )
+    for product_id, closing in history:
+        openings.setdefault(product_id, closing)
+    return openings
+
+
+def build_daily_sheet_context(shop):
+    """Build the context for the daily stock sheet of one shop and today.
+
+    Shared by the sheet page and the manager's dashboard, where the same form
+    is shown first so the manager can fill the day in without navigating away.
+    """
+    today = timezone.localdate()
+
+    price_card = list(
+        ShopProduct.objects.filter(shop=shop, is_active=True)
+        .select_related("product")
+        .order_by("product__name", "product__category")
+    )
+
+    rank = price_list_rank()
+    price_card.sort(
+        key=lambda card: (
+            rank.get((card.product.name, card.product.category), len(rank)),
+            card.product.name,
+            card.product.category,
+        )
+    )
+
+    today_entries = {
+        sale.product_id: sale
+        for sale in DailySale.objects.filter(
+            shop=shop, sale_date=today, total_stock__isnull=False
+        )
+    }
+    openings = _daily_sheet_openings(shop, today)
+
+    rows = []
+    for card in price_card:
+        entry = today_entries.get(card.product_id)
+        rows.append(
+            {
+                "product": card.product,
+                "section": card.product.category.strip() or "Uncategorised",
+                "cost": card.cost_price,
+                "price": card.selling_price,
+                "opening": openings.get(card.product_id, Decimal("0.00")),
+                "opening_input": _input_value(
+                    entry.opening_stock
+                    if entry and entry.opening_stock is not None
+                    else openings.get(card.product_id, Decimal("0.00"))
+                ),
+                "entry": entry,
+                "additional_input": _input_value(
+                    entry.additional_stock if entry else None
+                ),
+                "total_input": _input_value(entry.total_stock if entry else None),
+                "closing_input": _input_value(
+                    entry.closing_stock if entry else None
+                ),
+                "note_input": entry.stock_note if entry else "",
+                "sold": entry.units_sold if entry else None,
+                "amount": entry.total_revenue if entry else None,
+            }
+        )
+
+    day = DailySale.objects.filter(shop=shop, sale_date=today).aggregate(
+        revenue=Sum("total_revenue"),
+        cost=Sum("total_cost"),
+        profit=Sum("profit"),
+        units=Sum("units_sold"),
+    )
+
+    cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=today).first()
+    mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
+    bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
+    bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
+    total_sales = _money(day["revenue"])
+
+    expense_rows = [
+        {"description": row["description"], "amount": _input_value(row["amount"])}
+        for row in ShopExpense.objects.filter(shop=shop, expense_date=today)
+        .order_by("pk")
+        .values("description", "amount")
+    ]
+    expense_total = sum(
+        (Decimal(str(row["amount"])) for row in expense_rows), Decimal("0.00")
+    )
+    cash = total_sales - mpesa
+    balance = cash - expense_total - bill_out + bill_paid
+
+    section_counts = {}
+    for row in rows:
+        section_counts[row["section"]] = section_counts.get(row["section"], 0) + 1
+
+    return {
+        "shop": shop,
+        "today": today,
+        "openings": openings,
+        "rows": rows,
+        "sections": [
+            {"name": name, "count": count}
+            for name, count in section_counts.items()
+        ],
+        "has_products": bool(rows),
+        "day_revenue": _money(day["revenue"]),
+        "day_cost": _money(day["cost"]),
+        "day_profit": _money(day["profit"]),
+        "day_units": _money(day["units"]),
+        "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
+        "cash_record": cash_record,
+        "cash_mpesa": str(mpesa) if cash_record else "",
+        "cash_bill_out": str(bill_out) if cash_record else "",
+        "cash_bill_paid": str(bill_paid) if cash_record else "",
+        "cash_expenses": (
+            format(expense_total.normalize(), "f") if expense_total else ""
+        ),
+        "expense_rows": expense_rows,
+        "cash_total_sales": total_sales,
+        "cash_cash": cash,
+        "cash_expense_total": expense_total,
+        "cash_balance": balance.quantize(Decimal("0.01")),
+    }
+
+
 class LoginView(AuthLoginView):
     """Sign a user in and send them to the dashboard for their role."""
 
@@ -273,6 +429,11 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
             )
         context["trend_rows"] = trend_rows
         context["today"] = today
+        context["today_sales"] = list(
+            sales.filter(sale_date=today)
+            .select_related("shop")
+            .order_by("shop__name", "product__name")
+        )
 
         # --- Chart payloads, rendered by Chart.js in the template ---
         week = sales.filter(sale_date__gte=window_start).aggregate(profit=Sum("profit"))
@@ -359,6 +520,7 @@ class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
 
         context["recent_sales"] = sales.order_by("-sale_date", "-id")[:MANAGER_HISTORY_ROWS]
         context["sale_form_url"] = reverse("daily_sales_sheet")
+        context.update(build_daily_sheet_context(shop))
         return context
 
 
@@ -415,125 +577,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 
     def _build_context(self):
         """Gather the sheet rows, openings and the day's recorded totals."""
-        shop = self.shop
-        today = timezone.localdate()
-
-        price_card = list(
-            ShopProduct.objects.filter(shop=shop, is_active=True)
-            .select_related("product")
-            .order_by("product__name", "product__category")
-        )
-
-        # Follow the owner's price-list row order (250ml ... soda). Products
-        # missing from the file sort alphabetically after the listed ones.
-        rank = price_list_rank()
-        price_card.sort(
-            key=lambda card: (
-                rank.get((card.product.name, card.product.category), len(rank)),
-                card.product.name,
-                card.product.category,
-            )
-        )
-
-        # Today's saved stock rows, used to pre-fill the inputs.
-        today_entries = {
-            sale.product_id: sale
-            for sale in DailySale.objects.filter(
-                shop=shop, sale_date=today, total_stock__isnull=False
-            )
-        }
-
-        # Opening stock = the latest closing stock before today, per product.
-        openings = {}
-        previous = (
-            DailySale.objects.filter(
-                shop=shop, sale_date__lt=today, closing_stock__isnull=False
-            )
-            .order_by("product_id", "-sale_date", "-id")
-        )
-        for sale in previous:
-            openings.setdefault(sale.product_id, sale.closing_stock)
-
-        rows = []
-        for card in price_card:
-            entry = today_entries.get(card.product_id)
-            rows.append(
-                {
-                    "product": card.product,
-                    "section": card.product.category.strip() or "Uncategorised",
-                    "cost": card.cost_price,
-                    "price": card.selling_price,
-                    "opening": openings.get(card.product_id, Decimal("0.00")),
-                    "opening_input": _input_value(
-                        entry.opening_stock
-                        if entry and entry.opening_stock is not None
-                        else openings.get(card.product_id, Decimal("0.00"))
-                    ),
-                    "entry": entry,
-                    "additional_input": _input_value(
-                        entry.additional_stock if entry else None
-                    ),
-                    "total_input": _input_value(entry.total_stock if entry else None),
-                    "closing_input": _input_value(
-                        entry.closing_stock if entry else None
-                    ),
-                    "sold": entry.units_sold if entry else None,
-                    "amount": entry.total_revenue if entry else None,
-                }
-            )
-
-        day = DailySale.objects.filter(shop=shop, sale_date=today).aggregate(
-            revenue=Sum("total_revenue"),
-            cost=Sum("total_cost"),
-            profit=Sum("profit"),
-            units=Sum("units_sold"),
-        )
-
-        # Cash side of the same day: the manager enters M-Pesa, expenses and the
-        # bills; total sales, cash and the balance carried forward are derived.
-        cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=today).first()
-        mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
-        bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
-        bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
-        total_sales = _money(day["revenue"])
-        expense_total = _money(
-            ShopExpense.objects.filter(shop=shop, expense_date=today).aggregate(
-                amount=Sum("amount")
-            )["amount"]
-        )
-        cash = total_sales - mpesa
-        balance = cash - expense_total - bill_out + bill_paid
-
-        # Filter chips, in sheet order (250ml ... soda) with a row count each.
-        section_counts = {}
-        for row in rows:
-            section_counts[row["section"]] = section_counts.get(row["section"], 0) + 1
-
-        return {
-            "shop": shop,
-            "today": today,
-            "openings": openings,
-            "rows": rows,
-            "sections": [
-                {"name": name, "count": count}
-                for name, count in section_counts.items()
-            ],
-            "has_products": bool(rows),
-            "day_revenue": _money(day["revenue"]),
-            "day_cost": _money(day["cost"]),
-            "day_profit": _money(day["profit"]),
-            "day_units": _money(day["units"]),
-            "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
-            "cash_record": cash_record,
-            "cash_mpesa": str(mpesa) if cash_record else "",
-            "cash_bill_out": str(bill_out) if cash_record else "",
-            "cash_bill_paid": str(bill_paid) if cash_record else "",
-            "cash_expenses": str(expense_total) if expense_total else "",
-            "cash_total_sales": total_sales,
-            "cash_cash": cash,
-            "cash_expense_total": expense_total,
-            "cash_balance": balance.quantize(Decimal("0.01")),
-        }
+        return build_daily_sheet_context(self.shop)
 
     def get(self, request, *args, **kwargs):
         """Render the sheet, pre-filled with what has already been recorded."""
@@ -541,36 +585,44 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 
     def post(self, request, *args, **kwargs):
         """Save every filled-in stock row, then show the day's running totals."""
-        context = self._build_context()
+        today = timezone.localdate()
         form = DailySalesSheetForm(
             request.POST,
             shop=self.shop,
-            openings=context["openings"],
-            day=context["today"],
+            openings=_daily_sheet_openings(self.shop, today),
+            day=today,
         )
         cash_form = ShopDailyCashForm(request.POST)
+
         raw_expenses = request.POST.get("expenses")
-        expense_amount = Decimal("0.00")
+        descriptions = request.POST.getlist("expense_description")
+        amounts = request.POST.getlist("expense_amount")
         expense_errors = []
-        if raw_expenses is not None and str(raw_expenses).strip():
-            try:
-                candidate = Decimal(str(raw_expenses).strip())
-            except (InvalidOperation, ValueError):
-                candidate = None
-            if (
-                candidate is None
-                or not candidate.is_finite()
-                or candidate < 0
-                or candidate > Decimal("999999999999.99")
-                or candidate.as_tuple().exponent < -2
-            ):
-                expense_errors.append(
-                    "Expenses: enter a non-negative amount with up to two decimal places."
-                )
-            else:
-                expense_amount = candidate
+        expense_items = []
+        if descriptions or amounts:
+            for index in range(max(len(descriptions), len(amounts))):
+                description = (
+                    descriptions[index] if index < len(descriptions) else ""
+                ).strip()
+                raw_amount = amounts[index] if index < len(amounts) else ""
+                if not description and not str(raw_amount).strip():
+                    continue
+                amount, error = _parse_money_input(raw_amount, f"Expense {index + 1}")
+                if error:
+                    expense_errors.append(error)
+                else:
+                    expense_items.append((description or "Expense", amount))
+            expense_amount = sum(
+                (amount for _, amount in expense_items), Decimal("0.00")
+            )
+        else:
+            expense_amount, error = _parse_money_input(raw_expenses, "Expenses")
+            if error:
+                expense_errors.append(error)
+
         if not form.is_valid() or not cash_form.is_valid() or expense_errors:
-            # Keep whatever the user typed so a rejected row can be fixed in place.
+            # Re-render with what the user typed so nothing has to be retyped.
+            context = build_daily_sheet_context(self.shop)
             for row in context["rows"]:
                 key = row["product"].pk
                 for name, prefix in (
@@ -582,14 +634,26 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
                     raw = request.POST.get(f"{prefix}{key}")
                     if raw is not None and str(raw).strip() != "":
                         row[name] = raw
+                note_raw = request.POST.get(f"{DailySalesSheetForm.NOTE_PREFIX}{key}")
+                if note_raw is not None:
+                    row["note_input"] = note_raw
             errors = list(form.non_field_errors())
             for field, field_errors in cash_form.errors.items():
                 label = field.replace("_", " ").capitalize()
                 errors.extend(f"{label}: {error}" for error in field_errors)
             errors.extend(expense_errors)
-            if raw_expenses is not None:
-                context["cash_expenses"] = raw_expenses
-                raw = str(raw_expenses).strip()
+
+            if expense_items:
+                context["expense_rows"] = [
+                    {"description": description, "amount": _input_value(amount)}
+                    for description, amount in expense_items
+                ]
+                raw_total = str(expense_amount)
+            else:
+                raw_total = raw_expenses
+            if raw_total is not None:
+                context["cash_expenses"] = raw_total
+                raw = str(raw_total).strip()
                 if raw:
                     try:
                         parsed = Decimal(raw)
@@ -605,45 +669,61 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             context["form_warnings"] = form.warnings
             return self.render_to_response(context, status=400)
 
-        # Save the day's cash split alongside the stock rows so one submit
-        # records the whole sheet.
-        ShopDailyCash.objects.update_or_create(
-            shop=self.shop,
-            cash_date=context["today"],
-            defaults={
-                "mpesa": cash_form.cleaned_data["mpesa"] or Decimal("0.00"),
-                "bill_out": cash_form.cleaned_data["bill_out"] or Decimal("0.00"),
-                "bill_paid": cash_form.cleaned_data["bill_paid"] or Decimal("0.00"),
-                "recorded_by": request.user,
-            },
-        )
-
-        if raw_expenses is not None:
-            existing_expenses = list(
-                ShopExpense.objects.filter(
-                    shop=self.shop, expense_date=context["today"]
-                ).order_by("pk")
+        # One transaction for the whole sheet: cash, every expense and every
+        # product row, so a slow submit never leaves a half-written day behind.
+        with transaction.atomic():
+            ShopDailyCash.objects.update_or_create(
+                shop=self.shop,
+                cash_date=today,
+                defaults={
+                    "mpesa": cash_form.cleaned_data["mpesa"] or Decimal("0.00"),
+                    "bill_out": cash_form.cleaned_data["bill_out"] or Decimal("0.00"),
+                    "bill_paid": cash_form.cleaned_data["bill_paid"] or Decimal("0.00"),
+                    "recorded_by": request.user,
+                },
             )
-            if existing_expenses:
-                first = existing_expenses[0]
-                first.amount = expense_amount
-                first.description = "Daily expenses"
-                first.save(update_fields=["amount", "description"])
-                for extra in existing_expenses[1:]:
-                    extra.amount = Decimal("0.00")
-                    extra.save(update_fields=["amount"])
-            elif expense_amount > 0:
-                ShopExpense.objects.create(
-                    shop=self.shop,
-                    expense_date=context["today"],
-                    description="Daily expenses",
-                    amount=expense_amount,
-                    recorded_by=request.user,
-                )
 
-        sales = form.save(request.user)
-        if sales or raw_expenses is not None:
-            _save_shop_daily_profit(self.shop, context["today"], request.user, create=False)
+            if expense_items:
+                ShopExpense.objects.filter(shop=self.shop, expense_date=today).delete()
+                ShopExpense.objects.bulk_create(
+                    [
+                        ShopExpense(
+                            shop=self.shop,
+                            expense_date=today,
+                            description=description,
+                            amount=amount,
+                            recorded_by=request.user,
+                        )
+                        for description, amount in expense_items
+                    ]
+                )
+            elif raw_expenses is not None:
+                existing_expenses = list(
+                    ShopExpense.objects.filter(
+                        shop=self.shop, expense_date=today
+                    ).order_by("pk")
+                )
+                if existing_expenses:
+                    first = existing_expenses[0]
+                    first.amount = expense_amount
+                    first.description = "Daily expenses"
+                    first.save(update_fields=["amount", "description"])
+                    for extra in existing_expenses[1:]:
+                        extra.amount = Decimal("0.00")
+                        extra.save(update_fields=["amount"])
+                elif expense_amount > 0:
+                    ShopExpense.objects.create(
+                        shop=self.shop,
+                        expense_date=today,
+                        description="Daily expenses",
+                        amount=expense_amount,
+                        recorded_by=request.user,
+                    )
+
+            sales = form.save(request.user)
+
+        if sales or raw_expenses is not None or expense_items:
+            _save_shop_daily_profit(self.shop, today, request.user, create=False)
         for warning in form.warnings:
             messages.warning(request, warning)
 
@@ -658,8 +738,6 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 
         units = sum((s.units_sold for s in sales), Decimal("0.00"))
         amount = sum((s.total_revenue for s in sales), Decimal("0.00"))
-        # Profit is deliberately left out of the sheet and this flash: it is a
-        # dashboard figure, shown to the manager on their dashboard.
         messages.success(
             request,
             f"Saved {len(sales)} product(s): {units.normalize():f} unit(s) sold, "
@@ -1111,6 +1189,16 @@ class ShopPricingView(OwnerRequiredMixin, View):
 
         products = MasterProduct.objects.all().order_by("name", "category")
 
+        categories = []
+        for _, category in price_list_order():
+            if category and category not in categories:
+                categories.append(category)
+        for category in MasterProduct.objects.exclude(category="").values_list(
+            "category", flat=True
+        ).distinct():
+            if category not in categories:
+                categories.append(category)
+
         return render(
             request,
             self.template_name,
@@ -1119,6 +1207,7 @@ class ShopPricingView(OwnerRequiredMixin, View):
                 "shops": Shop.objects.all(),
                 "current_shop": shop,
                 "products": products,
+                "categories": categories,
             },
         )
 
@@ -1131,6 +1220,11 @@ class ShopPricingView(OwnerRequiredMixin, View):
         # Add a new item
         new_name = (request.POST.get("new_product_name") or "").strip()
         new_category = (request.POST.get("new_product_category") or "").strip()
+        if new_category == "__new__":
+            new_category = (request.POST.get("new_category_name") or "").strip()
+            if new_name and not new_category:
+                messages.error(request, "Enter a name for the new category.")
+                new_name = ""
         if new_name:
             try:
                 with transaction.atomic():

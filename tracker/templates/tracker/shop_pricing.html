@@ -39,13 +39,24 @@
 
         <div class="mb-4 flex flex-wrap items-end gap-2">
             <div class="flex-1 min-w-[180px]">
-                <label class="block text-xs font-medium text-slate-500">New item name</label>
-                <input type="text" name="new_product_name" placeholder="e.g. Gilbeys"
+                <label class="block text-xs font-medium text-slate-500" for="new-product-name">New item name</label>
+                <input id="new-product-name" type="text" name="new_product_name" placeholder="e.g. Gilbeys"
                        class="mt-1 w-full rounded-lg border-slate-300 bg-slate-50 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
             </div>
-            <div class="flex-1 min-w-[140px]">
-                <label class="block text-xs font-medium text-slate-500">Description / size</label>
-                <input type="text" name="new_product_category" placeholder="e.g. 250ml"
+            <div class="flex-1 min-w-[160px]">
+                <label class="block text-xs font-medium text-slate-500" for="new-product-category">Category</label>
+                <select id="new-product-category" name="new_product_category"
+                        class="mt-1 w-full rounded-lg border-slate-300 bg-slate-50 py-2 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                    <option value="">Choose a category…</option>
+                    {% for category in categories %}
+                        <option value="{{ category }}">{{ category }}</option>
+                    {% endfor %}
+                    <option value="__new__">+ New category…</option>
+                </select>
+            </div>
+            <div id="new-category-wrap" class="flex-1 min-w-[160px] hidden">
+                <label class="block text-xs font-medium text-slate-500" for="new-category-name">New category name</label>
+                <input id="new-category-name" type="text" name="new_category_name" placeholder="e.g. Juices"
                        class="mt-1 w-full rounded-lg border-slate-300 bg-slate-50 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
             </div>
             <button type="submit" class="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500">
@@ -235,6 +246,19 @@
 <script>
 (function () {
     "use strict";
+
+    const newCategorySelect = document.getElementById("new-product-category");
+    const newCategoryWrap = document.getElementById("new-category-wrap");
+    const newCategoryInput = document.getElementById("new-category-name");
+    if (newCategorySelect && newCategoryWrap) {
+        const toggleNewCategory = function () {
+            const isNew = newCategorySelect.value === "__new__";
+            newCategoryWrap.classList.toggle("hidden", !isNew);
+            if (isNew && newCategoryInput) newCategoryInput.focus();
+        };
+        newCategorySelect.addEventListener("change", toggleNewCategory);
+        toggleNewCategory();
+    }
 
     const formatKsh = function (value) {
         return "KSh " + Number(value || 0).toLocaleString("en-KE", {

@@ -98,35 +98,6 @@
 </div>
 {% endif %}
 
-<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue</p>
-        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_revenue|ksh }}</p>
-        <p class="mt-1 text-xs text-slate-500">{{ day_units|units }} units sold</p>
-    </div>
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Product cost</p>
-        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_cost|ksh }}</p>
-    </div>
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gross profit</p>
-        <p class="mt-2 text-xl font-bold {% if gross_profit < 0 %}text-rose-600{% else %}text-emerald-700{% endif %}">{{ gross_profit|ksh }}</p>
-    </div>
-    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Expenses</p>
-        <p class="mt-2 text-xl font-bold text-rose-600">{{ expense_total|ksh }}</p>
-    </div>
-    <div class="col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm md:col-span-1">
-        <p class="text-xs font-semibold uppercase tracking-wide text-emerald-800">Net profit</p>
-        <p class="mt-2 text-xl font-bold {% if net_profit < 0 %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ net_profit|ksh }}</p>
-        {% if saved_daily_profit %}
-        <p class="mt-1 text-xs text-emerald-800">Saved for {{ selected_date }}</p>
-        {% else %}
-        <p class="mt-1 text-xs text-emerald-800">Gross profit less expenses · not yet saved</p>
-        {% endif %}
-    </div>
-</div>
-
 <form method="post" id="profit-calculation-form">
     {% csrf_token %}
     <input type="hidden" name="action" value="calculate_daily_profit">
@@ -136,7 +107,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
         <div>
             <h2 class="text-base font-semibold text-slate-900">Units sold by product</h2>
-            <p class="mt-1 text-sm text-slate-500">Prices use this shop's saved price list.</p>
+            <p class="mt-1 text-sm text-slate-500">Prices use this shop's saved price list. Profit is calculated when saved.</p>
         </div>
         <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ selected_date }}</span>
     </div>
@@ -220,6 +191,35 @@
 })();
 </script>
 {% endif %}
+
+<div class="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue</p>
+        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_revenue|ksh }}</p>
+        <p class="mt-1 text-xs text-slate-500">{{ day_units|units }} units sold</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Product cost</p>
+        <p class="mt-2 text-xl font-bold text-slate-900">{{ day_cost|ksh }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gross profit</p>
+        <p class="mt-2 text-xl font-bold {% if gross_profit < 0 %}text-rose-600{% else %}text-emerald-700{% endif %}">{{ gross_profit|ksh }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Expenses</p>
+        <p class="mt-2 text-xl font-bold text-rose-600">{{ expense_total|ksh }}</p>
+    </div>
+    <div class="col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm md:col-span-1">
+        <p class="text-xs font-semibold uppercase tracking-wide text-emerald-800">Net profit</p>
+        <p class="mt-2 text-xl font-bold {% if net_profit < 0 %}text-rose-700{% else %}text-emerald-800{% endif %}">{{ net_profit|ksh }}</p>
+        {% if saved_daily_profit %}
+        <p class="mt-1 text-xs text-emerald-800">Saved for {{ selected_date }}</p>
+        {% else %}
+        <p class="mt-1 text-xs text-emerald-800">Gross profit less expenses - not yet saved</p>
+        {% endif %}
+    </div>
+</div>
 
 <section class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
     <div class="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 px-5 py-4">

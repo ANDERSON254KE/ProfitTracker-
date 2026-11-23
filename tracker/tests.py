@@ -400,6 +400,19 @@ class PageRenderTests(BaseDataTestCase):
         self.assertNotContains(response, ">Cost</th>")
         self.assertNotContains(response, "chart-manager-trend")
 
+    def test_manager_dashboard_leads_with_todays_sheet(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(reverse("manager_dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Today's daily sheet")
+        self.assertContains(response, 'id="sales-sheet"')
+        self.assertContains(response, f'name="add_{self.gilbeys.pk}"')
+        body = response.content.decode()
+        self.assertLess(
+            body.index("Today's daily sheet"),
+            body.index("Recent sales"),
+        )
+
     def test_sale_form_renders(self):
         self.client.force_login(self.fig_manager)
         response = self.client.get(reverse("daily_sale_create"))
@@ -1085,6 +1098,26 @@ class ShopPricingTests(BaseDataTestCase):
         self.assertIn("Fanta", {row["product"].name for row in sheet.context["rows"]})
         self.assertContains(sheet, "needs pricing")
 
+    def test_a_new_category_can_be_created_with_a_product(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("shop_pricing"),
+            {
+                "new_product_name": "Juice",
+                "new_product_category": "__new__",
+                "new_category_name": "Drinks",
+            },
+        )
+        self.assertRedirects(
+            response, reverse("shop_pricing"), fetch_redirect_response=False
+        )
+        product = MasterProduct.objects.get(name="Juice", category="Drinks")
+        self.assertEqual(ShopProduct.objects.filter(product=product).count(), 2)
+
+        page = self.client.get(reverse("shop_pricing"))
+        self.assertContains(page, "+ New category…")
+        self.assertIn("Drinks", page.context["categories"])
+
     def test_a_manager_cannot_save_prices(self):
         self.client.force_login(self.fig_manager)
         card = ShopProduct.objects.get(shop=self.fig_tree, product=self.gilbeys)
@@ -1583,6 +1616,67 @@ class DailySalesSheetTests(BaseDataTestCase):
             Decimal("1825.00"),
         )
 
+    def test_multiple_named_expenses_are_saved_and_summed(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="10", closing="6")
+        payload.update({
+            "mpesa": "300", "bill_out": "100", "bill_paid": "50",
+            "expense_description": ["Transport", "Snacks"],
+            "expense_amount": ["20.00", "5.50"],
+            "expenses": "0.00",
+        })
+        self.assertRedirects(
+            self.client.post(reverse(self.SHEET), payload), reverse(self.SHEET)
+        )
+
+        expenses = ShopExpense.objects.filter(
+            shop=self.fig_tree, expense_date=timezone.localdate()
+        ).order_by("description")
+        self.assertEqual(expenses.count(), 2)
+        self.assertEqual(
+            [(e.description, e.amount) for e in expenses],
+            [("Snacks", Decimal("5.50")), ("Transport", Decimal("20.00"))],
+        )
+
+        page = self.client.get(reverse(self.SHEET))
+        self.assertEqual(page.context["cash_expense_total"], Decimal("25.50"))
+        self.assertEqual(page.context["cash_balance"], Decimal("1824.50"))
+        self.assertContains(page, "Transport")
+        self.assertContains(page, "Snacks")
+
+    def test_negative_additional_stock_records_goods_given_out(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="-2", closing="0")
+        payload[f"open_{self.gilbeys.pk}"] = "10"
+        payload[f"note_{self.gilbeys.pk}"] = "Mary"
+
+        response = self.client.post(reverse(self.SHEET), payload)
+        self.assertEqual(response.status_code, 302)
+
+        sale = DailySale.objects.get(product=self.gilbeys)
+        self.assertEqual(sale.additional_stock, Decimal("-2.00"))
+        self.assertEqual(sale.stock_note, "Mary")
+        self.assertEqual(sale.given_out, Decimal("2.00"))
+        self.assertEqual(sale.total_stock, Decimal("8.00"))
+        self.assertEqual(sale.units_sold, Decimal("8.00"))
+
+        page = self.client.get(reverse(self.SHEET))
+        self.assertContains(page, "Mary")
+
+    def test_goods_given_out_appear_on_owner_dashboard(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="-2", closing="8")
+        payload[f"open_{self.gilbeys.pk}"] = "10"
+        payload[f"note_{self.gilbeys.pk}"] = "Mary"
+        self.client.post(reverse(self.SHEET), payload)
+
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("owner_dashboard"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Today's sales")
+        self.assertContains(page, "Given out")
+        self.assertContains(page, "Mary")
+
     def test_invalid_expense_amount_is_rejected(self):
         self.client.force_login(self.fig_manager)
         payload = self.stock(self.gilbeys, additional="10", closing="6")
@@ -1854,7 +1948,7 @@ class DailySalesSheetTests(BaseDataTestCase):
 
     def test_bad_numbers_are_rejected(self):
         self.client.force_login(self.fig_manager)
-        for bad in ("abc", "-5"):
+        for bad in ("abc",):
             response = self.post_stock(
                 (self.gilbeys, {"additional": bad, "total": "10", "closing": "4"}),
             )
