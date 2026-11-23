@@ -1,15 +1,15 @@
 {
+  "$schema": "openapi.vercel.sh/vercel.json",
   "buildCommand": "python manage.py migrate --noinput",
-  "builds": [
-    {
-      "src": "profit_tracker_pro/wsgi.py",
-      "use": "@vercel/python"
+  "functions": {
+    "profit_tracker_pro/wsgi.py": {
+      "maxDuration": 30
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "profit_tracker_pro/wsgi.py"
+      "source": "/(.*)",
+      "destination": "/profit_tracker_pro/wsgi.py"
     }
   ]
 }
