@@ -1579,7 +1579,7 @@ class ProductComparisonCSVView(OwnerRequiredMixin, View):
         return response
 
 
-def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_query=None):
+def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_query=None, product_ids=None):
     """Return ``(shops, rows)`` for products-by-shop within an optional date range."""
     shops = list(Shop.objects.all().order_by("name"))
     if shop_ids:
@@ -1589,6 +1589,8 @@ def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_
         sales = sales.filter(shop_id__in=[shop.pk for shop in shops])
     if start_date is not None and end_date is not None:
         sales = sales.filter(sale_date__range=(start_date, end_date))
+    if product_ids:
+        sales = sales.filter(product_id__in=product_ids)
     aggregated = {
         (row["product_id"], row["shop_id"]): row
         for row in sales.values("product_id", "shop_id").annotate(
@@ -1597,6 +1599,8 @@ def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_
     }
 
     products = MasterProduct.objects.all().order_by("name", "category")
+    if product_ids:
+        products = products.filter(pk__in=product_ids)
     if product_query:
         products = products.filter(
             Q(name__icontains=product_query) | Q(category__icontains=product_query)
@@ -1973,6 +1977,17 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
         start_date, end_date = _all_shops_profit_date_range(self.request)
         selected_shop_id = self.request.GET.get("report_shop") or ""
         product_query = (self.request.GET.get("product") or "").strip()
+        raw_product_ids = self.request.GET.getlist("products")
+        selected_product_ids = []
+        for raw in raw_product_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid not in selected_product_ids:
+                selected_product_ids.append(pid)
+        selected_product_ids = selected_product_ids[:7]
+
         shop_ids = None
         selected_report_shop = None
         if selected_shop_id:
@@ -1981,9 +1996,21 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
                 shop_ids = {selected_report_shop.pk}
             except (Shop.DoesNotExist, ValueError, TypeError):
                 selected_shop_id = ""
-        shops, rows = _product_report_rows(start_date, end_date, shop_ids=shop_ids, product_query=product_query)
+
+        shops, rows = _product_report_rows(
+            start_date,
+            end_date,
+            shop_ids=shop_ids,
+            product_query=product_query,
+            product_ids=selected_product_ids or None,
+        )
         profit_report = _all_shops_profit_report(start_date, end_date)
+        all_products = list(MasterProduct.objects.all().order_by("name", "category"))
+        selected_products = [p for p in all_products if p.pk in selected_product_ids]
         context["all_shops"] = list(Shop.objects.all().order_by("name"))
+        context["all_products"] = all_products
+        context["selected_product_ids"] = selected_product_ids
+        context["selected_products"] = selected_products
         context["shops"] = shops
         context["rows"] = rows
         context["selected_report_shop"] = selected_report_shop
@@ -1999,15 +2026,17 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             grand_total += profit
         context["shop_totals"] = shop_totals
         context["grand_total"] = grand_total
-        export_params = {
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-        }
+        export_params = [
+            ("start_date", start_date.isoformat()),
+            ("end_date", end_date.isoformat()),
+        ]
         if selected_shop_id:
-            export_params["report_shop"] = selected_shop_id
+            export_params.append(("report_shop", selected_shop_id))
         if product_query:
-            export_params["product"] = product_query
-        context["csv_export_url"] = f"{reverse('profit_sheet_csv')}?{urlencode(export_params)}"
+            export_params.append(("product", product_query))
+        for pid in selected_product_ids:
+            export_params.append(("products", str(pid)))
+        context["csv_export_url"] = f"{reverse('product_report_csv')}?{urlencode(export_params)}"
         context["profit_start_date"] = start_date.isoformat()
         context["profit_end_date"] = end_date.isoformat()
         context["profit_report"] = profit_report
@@ -2114,13 +2143,29 @@ class ProductReportCSVView(OwnerRequiredMixin, View):
         start_date, end_date = _all_shops_profit_date_range(request)
         selected_shop_id = request.GET.get("report_shop") or ""
         product_query = (request.GET.get("product") or "").strip()
+        raw_product_ids = request.GET.getlist("products")
+        selected_product_ids = []
+        for raw in raw_product_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid not in selected_product_ids:
+                selected_product_ids.append(pid)
+        selected_product_ids = selected_product_ids[:7]
         shop_ids = None
         if selected_shop_id:
             try:
                 shop_ids = {int(selected_shop_id)}
             except (TypeError, ValueError):
                 shop_ids = None
-        shops, rows = _product_report_rows(start_date, end_date, shop_ids=shop_ids, product_query=product_query)
+        shops, rows = _product_report_rows(
+            start_date,
+            end_date,
+            shop_ids=shop_ids,
+            product_query=product_query,
+            product_ids=selected_product_ids or None,
+        )
         output = StringIO()
         writer = csv.writer(output)
         writer.writerow(["From", start_date.isoformat(), "To", end_date.isoformat()])
