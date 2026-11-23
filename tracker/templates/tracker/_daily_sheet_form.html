@@ -107,7 +107,8 @@
                                    class="in-add stock-input h-9 w-full min-w-0 rounded-md border border-zinc-200 bg-white px-2 text-right text-sm tabular-nums text-zinc-900 placeholder:text-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
                             <input type="text" name="note_{{ row.product.pk }}" value="{{ row.note_input }}"
                                    placeholder="To who? (if given out)" maxlength="200"
-                                   class="mt-1 h-7 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-2 text-[11px] text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
+                                   aria-label="Who received these products?"
+                                   class="stock-note mt-1 hidden h-7 w-full min-w-0 rounded-md border border-zinc-200 bg-zinc-50 px-2 text-[11px] text-zinc-700 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10">
                         </div>
                         <label class="block min-w-0">
                             <span class="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-zinc-500 sm:hidden">Closing</span>
@@ -286,6 +287,10 @@
                 const closeInput = row.querySelector(".in-close");
                 const add = num(addInput);
                 const closing = num(closeInput);
+                const noteInput = row.querySelector(".stock-note");
+                if (noteInput) {
+                    noteInput.classList.toggle("hidden", add === null || add >= 0);
+                }
                 const opening = openInput && openInput.value !== ""
                     ? (parseFloat(openInput.value) || 0)
                     : (parseFloat(row.dataset.opening) || 0);

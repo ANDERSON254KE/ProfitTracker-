@@ -359,7 +359,10 @@ class DailySalesSheetForm(forms.Form):
                         f"{opening + additional:f}. Saved anyway -- double-check the count."
                     )
 
-            note = (self.data.get(self.NOTE_PREFIX + str(product_id)) or "").strip()
+            note = (
+                (self.data.get(self.NOTE_PREFIX + str(product_id)) or "").strip()
+                if additional < 0 else ""
+            )
             entries[product_id] = {
                 "opening": opening,
                 "additional": additional,

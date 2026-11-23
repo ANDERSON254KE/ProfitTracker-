@@ -1663,6 +1663,18 @@ class DailySalesSheetTests(BaseDataTestCase):
         page = self.client.get(reverse(self.SHEET))
         self.assertContains(page, "Mary")
 
+    def test_note_is_ignored_unless_stock_is_given_out(self):
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="2", closing="2")
+        payload[f"note_{self.gilbeys.pk}"] = "Mary"
+
+        response = self.client.post(reverse(self.SHEET), payload)
+        self.assertEqual(response.status_code, 302)
+
+        sale = DailySale.objects.get(product=self.gilbeys)
+        self.assertEqual(sale.additional_stock, Decimal("2.00"))
+        self.assertEqual(sale.stock_note, "")
+
     def test_goods_given_out_appear_on_owner_dashboard(self):
         self.client.force_login(self.fig_manager)
         payload = self.stock(self.gilbeys, additional="-2", closing="8")
