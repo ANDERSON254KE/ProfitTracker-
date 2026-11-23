@@ -5,11 +5,5 @@
     "profit_tracker_pro/wsgi.py": {
       "maxDuration": 30
     }
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/profit_tracker_pro/wsgi.py"
-    }
-  ]
+  }
 }
