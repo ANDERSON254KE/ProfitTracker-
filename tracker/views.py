@@ -44,6 +44,7 @@ from .forms import (
     ShopDailyCashForm,
     ShopPricingForm,
     StockAdditionForm,
+    WorkerProfileForm,
 )
 from .mixins import (
     LoginRequiredMixin,
@@ -52,6 +53,7 @@ from .mixins import (
     OwnerRequiredMixin,
 )
 from .models import (
+    MAX_WORKERS_PER_SHOP,
     CustomUser,
     DailySale,
     MasterProduct,
@@ -85,6 +87,53 @@ def _money(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _sync_shop_manager(shop):
+    """Keep the convenience ``Shop.manager`` link on an active worker."""
+    if shop is None:
+        return
+    candidate = (
+        CustomUser.objects.filter(
+            role=CustomUser.Role.MANAGER, assigned_shop=shop, is_active=True
+        )
+        .order_by("id")
+        .first()
+    )
+    candidate_id = candidate.pk if candidate else None
+    if shop.manager_id != candidate_id:
+        shop.manager = candidate
+        shop.save(update_fields=["manager"])
+
+
+def _worker_directory():
+    """Group managers by shop for the owner's profile area."""
+    workers = (
+        CustomUser.objects.filter(role=CustomUser.Role.MANAGER)
+        .select_related("assigned_shop")
+        .order_by("assigned_shop__name", "username")
+    )
+    grouped = {}
+    unassigned = []
+    for worker in workers:
+        if worker.assigned_shop_id:
+            grouped.setdefault(worker.assigned_shop_id, []).append(worker)
+        else:
+            unassigned.append(worker)
+
+    rows = []
+    for shop in Shop.objects.all():
+        shop_workers = grouped.get(shop.pk, [])
+        active_count = sum(1 for worker in shop_workers if worker.is_active)
+        rows.append(
+            {
+                "shop": shop,
+                "workers": shop_workers,
+                "active_count": active_count,
+                "full": active_count >= MAX_WORKERS_PER_SHOP,
+            }
+        )
+    return rows, unassigned
 
 
 def _save_shop_daily_profit(shop, day, user, create=True):
@@ -357,6 +406,10 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
         sales = DailySale.objects.select_related("product", "shop")
         shops = list(Shop.objects.all())
         context["shops"] = shops
+        worker_rows, unassigned_workers = _worker_directory()
+        context["worker_rows"] = worker_rows
+        context["unassigned_workers"] = unassigned_workers
+        context["max_workers"] = MAX_WORKERS_PER_SHOP
 
         # Overall totals across every shop.
         overall = sales.aggregate(
@@ -484,6 +537,69 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
             },
         }
         return context
+
+
+class WorkerProfileView(OwnerRequiredMixin, TemplateView):
+    """Owner-only directory for adding shop managers."""
+
+    template_name = "tracker/worker_profiles.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        worker_rows, unassigned_workers = _worker_directory()
+        context["worker_rows"] = worker_rows
+        context["unassigned_workers"] = unassigned_workers
+        context["max_workers"] = MAX_WORKERS_PER_SHOP
+        context.setdefault("form", WorkerProfileForm())
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = WorkerProfileForm(request.POST)
+        if form.is_valid():
+            worker = form.save()
+            _sync_shop_manager(worker.assigned_shop)
+            messages.success(
+                request,
+                f"Added {worker.get_full_name() or worker.username} "
+                f"to {worker.assigned_shop.name}.",
+            )
+            return redirect("worker_profiles")
+        return self.render_to_response(self.get_context_data(form=form))
+
+
+class WorkerProfileUpdateView(OwnerRequiredMixin, TemplateView):
+    """Owner-only editor for one existing shop manager."""
+
+    template_name = "tracker/worker_profile_form.html"
+
+    def get_worker(self):
+        return get_object_or_404(
+            CustomUser, pk=self.kwargs["pk"], role=CustomUser.Role.MANAGER
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        worker = kwargs.get("worker") or self.get_worker()
+        context["worker"] = worker
+        context.setdefault("form", WorkerProfileForm(instance=worker))
+        return context
+
+    def post(self, request, *args, **kwargs):
+        worker = self.get_worker()
+        old_shop = worker.assigned_shop
+        form = WorkerProfileForm(request.POST, instance=worker)
+        if form.is_valid():
+            worker = form.save()
+            _sync_shop_manager(old_shop)
+            _sync_shop_manager(worker.assigned_shop)
+            messages.success(
+                request,
+                f"Saved {worker.get_full_name() or worker.username}'s profile.",
+            )
+            return redirect("worker_profiles")
+        return self.render_to_response(
+            self.get_context_data(form=form, worker=worker)
+        )
 
 
 class ManagerDashboardView(ManagerRequiredMixin, TemplateView):

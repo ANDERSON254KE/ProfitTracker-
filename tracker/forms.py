@@ -12,10 +12,13 @@ every money figure -- are derived server side.
 from decimal import Decimal, InvalidOperation
 
 from django import forms
+from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import (
+    MAX_WORKERS_PER_SHOP,
+    CustomUser,
     DailySale,
     MasterProduct,
     Shop,
@@ -546,3 +549,83 @@ class StockAdditionForm(forms.ModelForm):
         self.fields["product"].label_from_instance = lambda product: (
             f"{product.name} ({product.category})" if product.category else product.name
         )
+
+
+class WorkerProfileForm(forms.ModelForm):
+    """Create or edit one shop manager from the owner's profile area."""
+
+    password = forms.CharField(
+        label="Password",
+        widget=forms.PasswordInput(render_value=False),
+        help_text="Required when adding a worker. Leave blank to keep the current password.",
+    )
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            "first_name",
+            "last_name",
+            "username",
+            "email",
+            "assigned_shop",
+            "is_active",
+            "password",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._original_password = self.instance.password
+        self.fields["first_name"].required = True
+        self.fields["assigned_shop"].required = True
+        self.fields["assigned_shop"].queryset = Shop.objects.all()
+        self.fields["password"].required = not self.instance.pk
+        if self.instance.pk:
+            self.fields["password"].help_text = (
+                "Leave blank to keep the current password."
+            )
+        for name, field in self.fields.items():
+            if name == "is_active":
+                field.widget.attrs["class"] = "h-4 w-4 rounded border-slate-300"
+            else:
+                field.widget.attrs.setdefault(
+                    "class",
+                    "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 "
+                    "py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500",
+                )
+
+    def clean_password(self):
+        password = self.cleaned_data.get("password")
+        if password:
+            validate_password(password, self.instance)
+        return password
+
+    def clean(self):
+        cleaned = super().clean()
+        shop = cleaned.get("assigned_shop")
+        if cleaned.get("is_active") and shop:
+            active = CustomUser.objects.filter(
+                role=CustomUser.Role.MANAGER,
+                assigned_shop=shop,
+                is_active=True,
+            )
+            if self.instance.pk:
+                active = active.exclude(pk=self.instance.pk)
+            if active.count() >= MAX_WORKERS_PER_SHOP:
+                self.add_error(
+                    "assigned_shop",
+                    f"This shop already has {MAX_WORKERS_PER_SHOP} active workers. "
+                    "Deactivate one first.",
+                )
+        return cleaned
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.role = CustomUser.Role.MANAGER
+        password = self.cleaned_data.get("password")
+        if password:
+            user.set_password(password)
+        else:
+            user.password = self._original_password
+        if commit:
+            user.save()
+        return user

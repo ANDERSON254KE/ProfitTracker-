@@ -4,6 +4,7 @@
     /login/  /logout/
     /owner/dashboard/                 -> owner, all shops
     /owner/pricing/                   -> owner, inline price editor
+    /owner/profiles/                  -> owner, worker profiles
     /manager/dashboard/               -> manager, their shop only
     /manager/sale/add/                -> manager, record a sale
     /api/shop-product-price/<pk>/     -> manager, price lookup for the preview JS
@@ -28,6 +29,12 @@ urlpatterns = [
     # Owner area
     path("owner/dashboard/", views.OwnerDashboardView.as_view(), name="owner_dashboard"),
     path("owner/pricing/", views.ShopPricingView.as_view(), name="shop_pricing"),
+    path("owner/profiles/", views.WorkerProfileView.as_view(), name="worker_profiles"),
+    path(
+        "owner/profiles/<int:pk>/",
+        views.WorkerProfileUpdateView.as_view(),
+        name="worker_profile_edit",
+    ),
     # Manager area
     path(
         "manager/dashboard/",

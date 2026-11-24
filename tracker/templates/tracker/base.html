@@ -111,6 +111,10 @@
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'shop_pricing' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
                             Pricing
                         </a>
+                        <a href="{% url 'worker_profiles' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'worker_profiles' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Profiles
+                        </a>
                     {% else %}
                         <a href="{% url 'manager_dashboard' %}"
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'manager_dashboard' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
@@ -159,6 +163,7 @@
         <a href="{% url 'product_report' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Reports / Profit Sheets</a>
         <a href="{% url 'product_comparison' %}" class="py-1 text-sm font-medium text-white hover:text-indigo-300">Compare</a>
         <a href="{% url 'shop_pricing' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Pricing</a>
+        <a href="{% url 'worker_profiles' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Profiles</a>
         {% else %}
         <a href="{% url 'manager_dashboard' %}" class="py-1 text-sm font-medium hover:text-indigo-300">My Shop</a>
         <a href="{% url 'daily_sale_create' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Record Sale</a>

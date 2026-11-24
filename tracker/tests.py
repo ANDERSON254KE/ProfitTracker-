@@ -226,6 +226,156 @@ class RoleAccessTests(BaseDataTestCase):
         self.assertRedirects(self.client.get("/"), reverse("manager_dashboard"))
 
 
+class WorkerProfileTests(BaseDataTestCase):
+    PASSWORD = "WorkerPass123!x"
+
+    def payload(self, **overrides):
+        data = {
+            "first_name": "Mary",
+            "last_name": "Wanjiku",
+            "username": "mary",
+            "email": "mary@example.com",
+            "assigned_shop": self.fig_tree.pk,
+            "is_active": "on",
+            "password": self.PASSWORD,
+        }
+        data.update(overrides)
+        return data
+
+    def test_only_owner_can_manage_profiles(self):
+        response = self.client.get(reverse("worker_profiles"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+        self.client.force_login(self.fig_manager)
+        self.assertEqual(
+            self.client.get(reverse("worker_profiles")).status_code, 403
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("worker_profile_edit", args=[self.fig_manager.pk])
+            ).status_code,
+            403,
+        )
+
+        self.client.force_login(self.owner)
+        self.assertEqual(
+            self.client.get(reverse("worker_profiles")).status_code, 200
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("worker_profile_edit", args=[self.fig_manager.pk])
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("worker_profile_edit", args=[self.owner.pk])
+            ).status_code,
+            404,
+        )
+
+    def test_owner_can_add_worker_who_can_open_their_shop_dashboard(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(reverse("worker_profiles"), self.payload())
+        self.assertRedirects(response, reverse("worker_profiles"))
+
+        worker = CustomUser.objects.get(username="mary")
+        self.assertEqual(worker.role, CustomUser.Role.MANAGER)
+        self.assertEqual(worker.assigned_shop, self.fig_tree)
+        self.assertTrue(worker.is_active)
+        self.assertTrue(worker.check_password(self.PASSWORD))
+        self.fig_tree.refresh_from_db()
+        self.assertIsNotNone(self.fig_tree.manager)
+
+        self.client.logout()
+        self.assertTrue(self.client.login(username="mary", password=self.PASSWORD))
+        self.assertRedirects(self.client.get("/"), reverse("manager_dashboard"))
+        self.assertEqual(
+            self.client.get(reverse("manager_dashboard")).status_code, 200
+        )
+
+    def test_shop_cannot_have_more_than_two_active_workers(self):
+        self.client.force_login(self.owner)
+        self.assertRedirects(
+            self.client.post(reverse("worker_profiles"), self.payload()),
+            reverse("worker_profiles"),
+        )
+        response = self.client.post(
+            reverse("worker_profiles"),
+            self.payload(
+                first_name="John", username="john", email="john@example.com"
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "already has 2 active workers")
+        self.assertFalse(CustomUser.objects.filter(username="john").exists())
+        self.assertEqual(
+            CustomUser.objects.filter(
+                role=CustomUser.Role.MANAGER,
+                assigned_shop=self.fig_tree,
+                is_active=True,
+            ).count(),
+            2,
+        )
+
+    def test_owner_can_edit_worker_shop_without_changing_password(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("worker_profiles"), self.payload())
+        worker = CustomUser.objects.get(username="mary")
+        original_hash = worker.password
+        self.fig_tree.manager = worker
+        self.fig_tree.save(update_fields=["manager"])
+
+        response = self.client.post(
+            reverse("worker_profile_edit", args=[worker.pk]),
+            self.payload(
+                username="mary2",
+                assigned_shop=self.empire.pk,
+                password="",
+            ),
+        )
+        self.assertRedirects(response, reverse("worker_profiles"))
+
+        worker.refresh_from_db()
+        self.assertEqual(worker.username, "mary2")
+        self.assertEqual(worker.assigned_shop, self.empire)
+        self.assertEqual(worker.role, CustomUser.Role.MANAGER)
+        self.assertEqual(worker.password, original_hash)
+        self.fig_tree.refresh_from_db()
+        self.assertNotEqual(self.fig_tree.manager_id, worker.pk)
+
+    def test_owner_can_disable_worker_access(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("worker_profiles"), self.payload())
+        worker = CustomUser.objects.get(username="mary")
+
+        data = self.payload(password="")
+        data.pop("is_active")
+        response = self.client.post(
+            reverse("worker_profile_edit", args=[worker.pk]), data
+        )
+        self.assertRedirects(response, reverse("worker_profiles"))
+
+        worker.refresh_from_db()
+        self.assertFalse(worker.is_active)
+
+    def test_owner_dashboard_shows_worker_profiles(self):
+        CustomUser.objects.create_user(
+            username="clerk",
+            first_name="Clerk",
+            password=self.PASSWORD,
+            role=CustomUser.Role.MANAGER,
+            assigned_shop=self.fig_tree,
+        )
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("owner_dashboard"))
+
+        self.assertContains(response, "Profiles")
+        self.assertContains(response, "Clerk")
+        self.assertContains(response, "2/2")
+
+
 class ManagerDashboardIsolationTests(BaseDataTestCase):
     """A manager's figures must only ever come from their own shop."""
 
