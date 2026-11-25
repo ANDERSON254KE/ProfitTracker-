@@ -599,6 +599,9 @@ class PageRenderTests(BaseDataTestCase):
         response = self.client.get(reverse("login"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Sign in")
+        self.assertContains(response, "Welcome back")
+        self.assertContains(response, 'id="togglePassword"')
+        self.assertNotContains(response, 'class="bg-slate-900 text-white shadow-lg"')
 
     def test_logout_requires_post(self):
         self.client.force_login(self.owner)

@@ -80,6 +80,7 @@
     <span class="loader"></span>
 </div>
 
+{% if request.resolver_match.url_name != 'login' %}
 <nav class="bg-slate-900 text-white shadow-lg">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div class="flex h-16 items-center justify-between">
@@ -171,8 +172,9 @@
     </div>
 </nav>
 {% endif %}
+{% endif %}
 
-<main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+<main class="{% if request.resolver_match.url_name == 'login' %}w-full{% else %}mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8{% endif %}">
     {% if messages %}
         <div class="mb-6 space-y-2">
             {% for message in messages %}
@@ -186,9 +188,11 @@
     {% block content %}{% endblock %}
 </main>
 
+{% if request.resolver_match.url_name != 'login' %}
 <footer class="mx-auto max-w-7xl px-4 pb-8 text-center text-xs text-slate-400">
     Figures are calculated on the server and locked in at the time of sale.
 </footer>
+{% endif %}
 
 {% block scripts %}{% endblock %}
 <script>

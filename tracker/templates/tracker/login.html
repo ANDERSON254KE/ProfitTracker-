@@ -4,50 +4,107 @@
 {% block title %}Sign in · Empire{% endblock %}
 
 {% block content %}
-<div class="mx-auto mt-16 max-w-md">
-    <div class="rounded-2xl bg-white p-8 shadow-xl">
-        <div class="mb-6 text-center">
-            <span class="inline-block rounded-xl bg-indigo-500 px-3 py-1.5 text-sm font-bold text-white">PT</span>
-            <h1 class="mt-4 text-2xl font-bold tracking-tight text-slate-900">Empire</h1>
-            <p class="mt-1 text-sm text-slate-500">Sign in to continue</p>
+<div class="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-slate-50 px-2 py-6">
+    <div class="w-full max-w-sm">
+        <div class="mb-6 flex items-center justify-center gap-2">
+            <span class="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-white">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 3v18h18M7 15l4-4 3 3 5-7" />
+                </svg>
+            </span>
+            <span class="text-base font-semibold tracking-tight text-slate-900">Empire</span>
         </div>
 
-        {% if form.errors %}
-            <div class="mb-4 rounded-lg bg-rose-100 px-4 py-3 text-sm font-medium text-rose-800">
-                Your username and password didn't match. Please try again.
-            </div>
-        {% endif %}
-
-        <form method="post" class="space-y-4">
-            {% csrf_token %}
-
-            <div>
-                <label for="id_username" class="block text-sm font-medium text-slate-700">Username</label>
-                <input type="text" name="username" id="id_username" autocomplete="username" required autofocus
-                       class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                {% if form.username.errors %}
-                    <p class="mt-1 text-xs text-rose-600">{{ form.username.errors|striptags }}</p>
-                {% endif %}
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="space-y-1 text-center">
+                <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Welcome back</h1>
+                <p class="text-sm text-slate-500">Sign in to your Empire account to continue.</p>
             </div>
 
-            <div>
-                <label for="id_password" class="block text-sm font-medium text-slate-700">Password</label>
-                <input type="password" name="password" id="id_password" autocomplete="current-password" required
-                       class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                {% if form.password.errors %}
-                    <p class="mt-1 text-xs text-rose-600">{{ form.password.errors|striptags }}</p>
-                {% endif %}
+            {% if form.errors %}
+            <div class="mt-5 flex gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800" role="alert">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mt-0.5 h-4 w-4 shrink-0">
+                    <circle cx="12" cy="12" r="10" />
+                    <path stroke-linecap="round" d="M12 8v4m0 4h.01" />
+                </svg>
+                <p class="font-medium">Your username and password didn't match. Please try again.</p>
             </div>
-
-            {% if next %}
-                <input type="hidden" name="next" value="{{ next }}">
             {% endif %}
 
-            <button type="submit"
-                    class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
-                Sign in
-            </button>
-        </form>
+            <form method="post" class="mt-6 space-y-4">
+                {% csrf_token %}
+
+                <div class="space-y-2">
+                    <label for="id_username" class="block text-sm font-medium text-slate-800">Username</label>
+                    <input id="id_username" name="username" type="text" autocomplete="username" required autofocus
+                           placeholder="Enter your username"
+                           class="h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10">
+                    {% if form.username.errors %}
+                    <p class="text-xs text-rose-600">{{ form.username.errors|striptags }}</p>
+                    {% endif %}
+                </div>
+
+                <div class="space-y-2">
+                    <label for="id_password" class="block text-sm font-medium text-slate-800">Password</label>
+                    <div class="relative">
+                        <input id="id_password" name="password" type="password" autocomplete="current-password" required
+                               placeholder="Enter your password"
+                               class="h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 pr-10 text-sm text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10">
+                        <button id="togglePassword" type="button" aria-label="Show password"
+                                class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-slate-400 hover:text-slate-700">
+                            <svg id="passwordEyeOpen" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z" />
+                                <circle cx="12" cy="12" r="3" />
+                            </svg>
+                            <svg id="passwordEyeClosed" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hidden h-4 w-4">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.9 9.9 0 0 1 12 5c6 0 9.5 7 9.5 7a15.4 15.4 0 0 1-2.2 3.1M6.2 6.2A15.4 15.4 0 0 0 2.5 12s3.5 7 9.5 7a9.8 9.8 0 0 0 3.1-.5" />
+                            </svg>
+                        </button>
+                    </div>
+                    {% if form.password.errors %}
+                    <p class="text-xs text-rose-600">{{ form.password.errors|striptags }}</p>
+                    {% endif %}
+                </div>
+
+                {% if next %}
+                <input type="hidden" name="next" value="{{ next }}">
+                {% endif %}
+
+                <button type="submit"
+                        class="h-10 w-full rounded-md bg-slate-900 px-4 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:ring-offset-2">
+                    Sign in
+                </button>
+            </form>
+
+            <div class="mt-6 border-t border-slate-100 pt-4 text-center text-xs text-slate-500">
+                Need an account? Ask your owner to add you as a worker.
+            </div>
+        </div>
+
+        <p class="mt-4 text-center text-[11px] text-slate-400">
+            Figures are calculated on the server and locked in at the time of sale.
+        </p>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const toggle = document.getElementById("togglePassword");
+    const password = document.getElementById("id_password");
+    const openEye = document.getElementById("passwordEyeOpen");
+    const closedEye = document.getElementById("passwordEyeClosed");
+    if (!toggle || !password || !openEye || !closedEye) {
+        return;
+    }
+    toggle.addEventListener("click", () => {
+        const showing = password.type === "text";
+        password.type = showing ? "password" : "text";
+        openEye.classList.toggle("hidden", !showing);
+        closedEye.classList.toggle("hidden", showing);
+        toggle.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    });
+})();
+</script>
 {% endblock %}
