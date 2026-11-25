@@ -1090,6 +1090,8 @@ class ProductReportTests(BaseDataTestCase):
         self.assertContains(response, 'name="open_sheet_shop"')
         self.assertContains(response, f'formaction="{reverse("product_report_csv")}"')
         self.assertContains(response, f'formaction="{reverse("all_shops_profit_workbook")}"')
+        self.assertContains(response, f'form="reportFilterForm" formaction="{reverse("product_report_csv")}"')
+        self.assertNotContains(response, 'href="" download')
         for shop in (self.fig_tree, self.empire):
             self.assertContains(response, f'value="{shop.pk}">{shop.name}</option>')
 
@@ -2694,25 +2696,14 @@ class ProductReportFilterTests(BaseDataTestCase):
         ).splitlines()
         self.assertEqual(len(csv_lines), 2)
 
-    def test_product_options_search_excludes_already_selected_products(self):
-        other = MasterProduct.objects.create(name="Gilbey's Gold", category="750ml")
+    def test_shop_checkboxes_and_instant_product_catalog_are_rendered(self):
+        page = self.client.get(reverse("product_report"))
 
-        response = self.client.get(
-            reverse("product_report_options"),
-            {"q": "gil", "exclude": [self.gilbeys.pk]},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        results = response.json()["results"]
-        self.assertEqual([item["id"] for item in results], [other.pk])
-
-    def test_product_options_require_a_usable_query_and_owner_role(self):
-        short = self.client.get(reverse("product_report_options"), {"q": "g"})
-        self.assertEqual(short.json(), {"results": []})
-
-        self.client.force_login(self.empire_manager)
-        forbidden = self.client.get(reverse("product_report_options"), {"q": "gil"})
-        self.assertEqual(forbidden.status_code, 403)
+        self.assertContains(page, 'id="reportFilterForm"')
+        self.assertContains(page, 'type="checkbox" name="report_shops"')
+        self.assertContains(page, 'id="product-catalog"')
+        self.assertNotContains(page, "Ctrl/Cmd-click to select shops")
+        self.assertContains(page, f'form="reportFilterForm" formaction="{reverse("product_report_csv")}"')
 
 
 class ManualStockAdditionTests(BaseDataTestCase):

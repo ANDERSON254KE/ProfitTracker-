@@ -15,7 +15,7 @@
     <div>
         <h2 class="text-base font-semibold text-slate-900">Product sales filter</h2>
         <p class="mt-1 text-sm text-slate-500">Search for the products you want, add them to the filter list, choose shops, then preview or download the same daily rows.</p>
-        <form method="get" action="{% url 'product_report' %}" class="mt-4 space-y-3">
+        <form id="reportFilterForm" method="get" action="{% url 'product_report' %}" class="mt-4 space-y-3">
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
                     <label for="profitStartDate" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">From</label>
@@ -28,24 +28,28 @@
                            class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                 </div>
                 <div>
-                    <label for="reportShops" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shops</label>
-                    <select id="reportShops" name="report_shops" multiple size="4"
-                            class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                        {% for shop in all_shops %}<option value="{{ shop.pk }}"{% if shop.pk in selected_shop_ids %} selected{% endif %}>{{ shop.name }}</option>{% endfor %}
-                    </select>
-                    <p class="mt-1 text-[11px] text-slate-500">Ctrl/Cmd-click to select shops. Leave empty for all shops.</p>
+                    <span class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shops</span>
+                    <div class="grid grid-cols-1 gap-1 rounded-lg border border-slate-300 bg-slate-50 p-2 sm:grid-cols-2">
+                        {% for shop in all_shops %}
+                        <label class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-white">
+                            <input type="checkbox" name="report_shops" value="{{ shop.pk }}"{% if shop.pk in selected_shop_ids %} checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            <span>{{ shop.name }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <p class="mt-1 text-[11px] text-slate-500">Tick the shops to include. Leave all unticked for all shops.</p>
                 </div>
             </div>
             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <label for="productPickerSearch" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Find products</label>
                 <div class="relative">
                     <input id="productPickerSearch" type="search" autocomplete="off"
-                           data-search-url="{% url 'product_report_options' %}"
-                           placeholder="Type a product name or category, e.g. Dallas"
+                           placeholder="Type a product name, e.g. Dallas"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                    <div id="productPickerResults" class="absolute inset-x-0 top-full z-20 mt-1 hidden max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"></div>
+                    <div id="productPickerResults" class="absolute inset-x-0 top-full z-20 mt-1 hidden max-h-60 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg"></div>
                 </div>
-                <p class="mt-1 text-[11px] text-slate-500">Type at least 2 letters, then click a result to add it. Leave the list empty to show all products.</p>
+                <p class="mt-1 text-[11px] text-slate-500">Tick as many products as you want. Leave the list empty to show all products.</p>
                 <div id="selectedProductList" class="mt-2 flex flex-wrap gap-2">
                     {% for product in selected_products %}
                     <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700" data-product-chip="{{ product.pk }}">
@@ -57,6 +61,7 @@
                 </div>
                 <p id="emptyProductList" class="mt-2 text-xs text-slate-400{% if selected_products %} hidden{% endif %}">No products selected — all products will be included.</p>
             </div>
+            {{ product_catalog|json_script:"product-catalog" }}
             <div class="flex flex-wrap gap-2">
                 <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Apply filters</button>
                 <a href="{% url 'product_report' %}" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Clear</a>
@@ -96,12 +101,12 @@
             <p class="mt-1 text-sm text-slate-500">
                 {{ profit_start_date }} to {{ profit_end_date }} ·
                 {% if selected_report_shops %}{{ selected_report_shops|length }} selected shop{{ selected_report_shops|length|pluralize }}{% else %}All shops{% endif %} ·
-                {% if selected_products %}up to {{ selected_products|length }} products{% elif product_query %}Search: {{ product_query }}{% else %}All products{% endif %}
+                {% if selected_products %}{{ selected_products|length }} selected product{{ selected_products|length|pluralize }}{% elif product_query %}Search: {{ product_query }}{% else %}All products{% endif %}
             </p>
         </div>
         <div class="flex flex-wrap gap-2">
-            <a href="{{ csv_export_url }}" download class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">Download CSV</a>
-            <a href="{{ profit_workbook_url }}" download class="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-600">Download workbook</a>
+            <button type="submit" form="reportFilterForm" formaction="{% url 'product_report_csv' %}" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">Download CSV</button>
+            <button type="submit" form="reportFilterForm" formaction="{% url 'all_shops_profit_workbook' %}" class="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-600">Download workbook</button>
         </div>
     </div>
     <div class="grid gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:grid-cols-3">
@@ -347,68 +352,81 @@
     if (!search) {
         return;
     }
+    const catalogNode = document.getElementById("product-catalog");
+    const catalog = catalogNode ? JSON.parse(catalogNode.textContent) : [];
     const results = document.getElementById("productPickerResults");
     const selectedList = document.getElementById("selectedProductList");
     const emptyNote = document.getElementById("emptyProductList");
-    let timer = null;
-    let latestRequest = 0;
 
     function selectedIds() {
         return Array.from(selectedList.querySelectorAll("[data-product-input]"))
             .map((input) => input.dataset.productInput);
     }
 
+    function syncCheckbox(productId, checked) {
+        const checkbox = results.querySelector(`[data-product-toggle="${productId}"]`);
+        if (checkbox) {
+            checkbox.checked = checked;
+        }
+    }
+
     function updateEmptyNote() {
         emptyNote.classList.toggle("hidden", selectedIds().length > 0);
     }
 
-    function renderResults(items, message) {
+    function renderResults() {
+        const query = search.value.trim().toLowerCase();
         results.replaceChildren();
-        if (message) {
-            const note = document.createElement("p");
-            note.className = "px-3 py-2 text-sm text-slate-500";
-            note.textContent = message;
-            results.appendChild(note);
-            results.classList.remove("hidden");
+        if (!query) {
+            results.classList.add("hidden");
             return;
         }
-        items.forEach((item) => {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-indigo-50";
-            button.dataset.productId = String(item.id);
-            button.dataset.productName = item.name;
-            button.dataset.productCategory = item.category || "";
-
-            const name = document.createElement("span");
-            name.className = "font-medium text-slate-800";
-            name.textContent = item.name;
-            button.appendChild(name);
-
-            if (item.category) {
-                const category = document.createElement("span");
-                category.className = "shrink-0 text-xs text-slate-400";
-                category.textContent = item.category;
-                button.appendChild(category);
-            }
-            results.appendChild(button);
-        });
-        if (!items.length) {
+        const selected = new Set(selectedIds());
+        const matches = catalog.filter((item) => item.search.includes(query)).slice(0, 60);
+        if (!matches.length) {
             const note = document.createElement("p");
             note.className = "px-3 py-2 text-sm text-slate-500";
             note.textContent = "No matching products.";
             results.appendChild(note);
+            results.classList.remove("hidden");
+            return;
         }
+        matches.forEach((item) => {
+            const label = document.createElement("label");
+            label.className = "flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-indigo-50";
+
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500";
+            checkbox.dataset.productToggle = String(item.id);
+            checkbox.checked = selected.has(String(item.id));
+
+            const name = document.createElement("span");
+            name.className = "font-medium text-slate-800";
+            name.textContent = item.name;
+
+            label.appendChild(checkbox);
+            label.appendChild(name);
+            if (item.category) {
+                const category = document.createElement("span");
+                category.className = "ml-auto shrink-0 text-xs text-slate-400";
+                category.textContent = item.category;
+                label.appendChild(category);
+            }
+            results.appendChild(label);
+        });
         results.classList.remove("hidden");
     }
 
     function addProduct(product) {
-        if (selectedIds().includes(String(product.id))) {
+        const productId = String(product.id);
+        if (selectedIds().includes(productId)) {
+            syncCheckbox(productId, true);
             return;
         }
         const chip = document.createElement("span");
         chip.className = "inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700";
-        chip.dataset.productChip = String(product.id);
+        chip.dataset.productChip = productId;
         chip.appendChild(document.createTextNode(
             product.category ? `${product.name} · ${product.category}` : product.name
         ));
@@ -416,7 +434,7 @@
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "ml-0.5 text-indigo-400 hover:text-indigo-700";
-        remove.dataset.removeProduct = String(product.id);
+        remove.dataset.removeProduct = productId;
         remove.setAttribute("aria-label", `Remove ${product.name}`);
         remove.textContent = "×";
         chip.appendChild(remove);
@@ -424,11 +442,12 @@
         const input = document.createElement("input");
         input.type = "hidden";
         input.name = "products";
-        input.value = String(product.id);
-        input.dataset.productInput = String(product.id);
+        input.value = productId;
+        input.dataset.productInput = productId;
 
         selectedList.appendChild(chip);
         selectedList.appendChild(input);
+        syncCheckbox(productId, true);
         updateEmptyNote();
     }
 
@@ -438,67 +457,38 @@
                 element.remove();
             }
         });
+        syncCheckbox(productId, false);
         updateEmptyNote();
     }
 
-    function loadProducts(query) {
-        const requestId = ++latestRequest;
-        const params = new URLSearchParams({ q: query });
-        selectedIds().forEach((id) => params.append("exclude", id));
-        fetch(`${search.dataset.searchUrl}?${params.toString()}`, {
-            headers: { "X-Requested-With": "XMLHttpRequest" }
-        })
-            .then((response) => response.ok ? response.json() : Promise.reject())
-            .then((data) => {
-                if (requestId === latestRequest) {
-                    renderResults(data.results || []);
-                }
-            })
-            .catch(() => {
-                if (requestId === latestRequest) {
-                    renderResults([], "Product search is unavailable.");
-                }
-            });
-    }
-
-    search.addEventListener("input", () => {
-        window.clearTimeout(timer);
-        const query = search.value.trim();
-        if (query.length < 2) {
-            latestRequest += 1;
-            results.replaceChildren();
-            results.classList.add("hidden");
-            return;
-        }
-        timer = window.setTimeout(() => loadProducts(query), 150);
-    });
+    search.addEventListener("input", renderResults);
 
     search.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") {
             return;
         }
         event.preventDefault();
-        const first = results.querySelector("[data-product-id]");
+        const first = results.querySelector("[data-product-toggle]");
         if (first) {
             first.click();
         }
     });
 
-    results.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-product-id]");
-        if (!button) {
+    results.addEventListener("change", (event) => {
+        const checkbox = event.target.closest("[data-product-toggle]");
+        if (!checkbox) {
             return;
         }
-        addProduct({
-            id: button.dataset.productId,
-            name: button.dataset.productName,
-            category: button.dataset.productCategory,
-        });
-        search.value = "";
-        latestRequest += 1;
-        results.replaceChildren();
-        results.classList.add("hidden");
-        search.focus();
+        const productId = checkbox.dataset.productToggle;
+        const product = catalog.find((item) => String(item.id) === productId);
+        if (!product) {
+            return;
+        }
+        if (checkbox.checked) {
+            addProduct(product);
+        } else {
+            removeProduct(productId);
+        }
     });
 
     selectedList.addEventListener("click", (event) => {

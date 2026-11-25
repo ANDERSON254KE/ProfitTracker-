@@ -78,8 +78,6 @@ SHOP_DETAIL_PAGE_SIZE = 30
 SHOP_TOP_PRODUCTS = 10
 #: Daily rows rendered in the product report preview before downloading.
 REPORT_PREVIEW_ROWS = 20
-#: Product matches returned by the report's search picker.
-REPORT_PRODUCT_OPTIONS = 20
 #: Kenyan shillings symbol used by the ``ksh`` template filter.
 CURRENCY = "KSh"
 
@@ -2249,33 +2247,6 @@ def _daily_sales_workbook_response(filters):
     return response
 
 
-class ProductReportOptionsView(OwnerRequiredMixin, View):
-    """JSON product lookup for the report's search-and-add picker."""
-
-    def get(self, request):
-        query = (request.GET.get("q") or "").strip()
-        if len(query) < 2:
-            return JsonResponse({"results": []})
-        excluded_ids = _parse_int_values(request.GET.getlist("exclude"))
-        products = (
-            MasterProduct.objects.filter(
-                Q(name__icontains=query) | Q(category__icontains=query)
-            )
-            .exclude(pk__in=excluded_ids)
-            .order_by("name", "category")[:REPORT_PRODUCT_OPTIONS]
-        )
-        return JsonResponse({
-            "results": [
-                {
-                    "id": product.pk,
-                    "name": product.name,
-                    "category": product.category or "",
-                }
-                for product in products
-            ]
-        })
-
-
 class ProductReportView(OwnerRequiredMixin, TemplateView):
     """Date-filtered report: every product, one profit column per shop.
 
@@ -2352,12 +2323,21 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             shops=filters["shops"] or None,
         )
         daily_report = _daily_sales_report(filters)
-        selected_products = list(
-            MasterProduct.objects.filter(pk__in=filters["product_ids"]).order_by(
-                "name", "category"
-            )
-        )
+        all_products = list(MasterProduct.objects.all().order_by("name", "category"))
+        selected_products = [
+            product for product in all_products
+            if product.pk in filters["product_ids"]
+        ]
         context["all_shops"] = filters["all_shops"]
+        context["product_catalog"] = [
+            {
+                "id": product.pk,
+                "name": product.name,
+                "category": product.category or "",
+                "search": f"{product.name} {product.category or ''}".lower(),
+            }
+            for product in all_products
+        ]
         context["selected_shop_ids"] = filters["shop_ids"]
         context["selected_report_shops"] = filters["shops"]
         context["selected_product_ids"] = filters["product_ids"]
