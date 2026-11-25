@@ -39,6 +39,11 @@ from tracker.views import _stock_batch_profit_rows
 
 CustomUser = get_user_model()
 
+
+def streamed_csv(response):
+    return b"".join(response.streaming_content).decode()
+
+
 # Password hashing dominates the runtime of these tests otherwise.
 FAST_PASSWORD_HASHER = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
@@ -238,6 +243,12 @@ class WorkerProfileTests(BaseDataTestCase):
             "assigned_shop": self.fig_tree.pk,
             "is_active": "on",
             "password": self.PASSWORD,
+            "confirm_password": self.PASSWORD,
+            "id_number": "12345678",
+            "residency": "Kilifi",
+            "guardian_name": "Jane Wanjiku",
+            "guardian_phone": "0712345678",
+            "guardian_id_number": "87654321",
         }
         data.update(overrides)
         return data
@@ -295,6 +306,67 @@ class WorkerProfileTests(BaseDataTestCase):
             self.client.get(reverse("manager_dashboard")).status_code, 200
         )
 
+    def test_identity_and_emergency_details_are_saved_and_visible(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(reverse("worker_profiles"), self.payload())
+        self.assertRedirects(response, reverse("worker_profiles"))
+
+        worker = CustomUser.objects.get(username="mary")
+        self.assertEqual(worker.id_number, "12345678")
+        self.assertEqual(worker.residency, "Kilifi")
+        self.assertEqual(worker.guardian_name, "Jane Wanjiku")
+        self.assertEqual(worker.guardian_phone, "0712345678")
+        self.assertEqual(worker.guardian_id_number, "87654321")
+
+        page = self.client.get(reverse("worker_profiles"))
+        self.assertContains(page, "Confirm Password")
+        self.assertContains(page, "password-toggle")
+        self.assertContains(page, "ID Number")
+        self.assertContains(page, "Residency")
+        self.assertContains(page, "Guardian / Emergency Contact")
+        self.assertContains(page, "12345678")
+        self.assertContains(page, "Kilifi")
+        self.assertContains(page, "Jane Wanjiku")
+
+    def test_confirm_password_must_match(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("worker_profiles"),
+            self.payload(confirm_password="different"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Passwords do not match.")
+        self.assertFalse(CustomUser.objects.filter(username="mary").exists())
+
+    def test_owner_can_delete_a_worker_profile(self):
+        self.client.force_login(self.owner)
+        self.client.post(reverse("worker_profiles"), self.payload())
+        worker = CustomUser.objects.get(username="mary")
+
+        response = self.client.post(
+            reverse("worker_profile_delete", args=[worker.pk])
+        )
+        self.assertRedirects(response, reverse("worker_profiles"))
+        self.assertFalse(CustomUser.objects.filter(pk=worker.pk).exists())
+
+    def test_worker_with_recorded_sales_cannot_be_deleted(self):
+        DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            units_sold=Decimal("1"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("worker_profile_delete", args=[self.fig_manager.pk]),
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("worker_profiles"))
+        self.assertTrue(CustomUser.objects.filter(pk=self.fig_manager.pk).exists())
+        self.assertContains(response, "Deactivate them instead.")
+
     def test_shop_cannot_have_more_than_two_active_workers(self):
         self.client.force_login(self.owner)
         self.assertRedirects(
@@ -333,6 +405,7 @@ class WorkerProfileTests(BaseDataTestCase):
                 username="mary2",
                 assigned_shop=self.empire.pk,
                 password="",
+                confirm_password="",
             ),
         )
         self.assertRedirects(response, reverse("worker_profiles"))
@@ -350,7 +423,7 @@ class WorkerProfileTests(BaseDataTestCase):
         self.client.post(reverse("worker_profiles"), self.payload())
         worker = CustomUser.objects.get(username="mary")
 
-        data = self.payload(password="")
+        data = self.payload(password="", confirm_password="")
         data.pop("is_active")
         response = self.client.post(
             reverse("worker_profile_edit", args=[worker.pk]), data
@@ -1072,9 +1145,14 @@ class ProductReportTests(BaseDataTestCase):
             reverse("product_report_csv"),
             {"start_date": today.isoformat(), "end_date": today.isoformat()},
         )
-        csv_rows = csv_response.content.decode().splitlines()
+        csv_rows = streamed_csv(csv_response).splitlines()
         self.assertEqual(csv_rows[0], f"From,{today.isoformat()},To,{today.isoformat()}")
-        self.assertIn("1700.00", next(line for line in csv_rows if line.startswith("Gilbeys")))
+        self.assertEqual(
+            csv_rows[1],
+            "Date,Shop,Product,Category,Units Sold,Revenue (KSh),Profit (KSh)",
+        )
+        self.assertIn(",10.00,6000.00,1500.00", ",".join(csv_rows))
+        self.assertIn(",2.00,1100.00,200.00", ",".join(csv_rows))
 
     def test_products_with_no_sales_are_included_with_zero_cells(self):
         self.client.force_login(self.owner)
@@ -1100,36 +1178,29 @@ class ProductReportTests(BaseDataTestCase):
         self.assertEqual(response.status_code, 403)
         self.assertNotContains(response, 'name="open_sheet_shop"', status_code=403)
 
-    def test_csv_export_lists_every_product_and_shop(self):
+    def test_csv_export_streams_daily_sales_by_shop(self):
         self.client.force_login(self.owner)
         response = self.client.get(reverse("product_report_csv"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["Content-Type"], "text/csv")
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
 
-        lines = response.content.decode().splitlines()
+        csv_text = streamed_csv(response)
+        lines = csv_text.splitlines()
         self.assertEqual(
-            lines[1], "Product,Category,Empire Shop Units,Empire Shop Profit,"
-                      "Fig Tree Units,Fig Tree Profit,"
-                      "Total Units,Total Profit,Total Revenue"
+            lines[1],
+            "Date,Shop,Product,Category,Units Sold,Revenue (KSh),Profit (KSh)",
         )
-        gilbeys_row = next(line for line in lines if line.startswith("Gilbeys"))
-        self.assertIn("1500.00", gilbeys_row)   # Empire cell
-        self.assertIn("200.00", gilbeys_row)    # Fig Tree cell
-        self.assertIn("1700.00", gilbeys_row)   # total profit
+        empire_row = next(line for line in lines if ",Empire Shop,Gilbeys," in line)
+        fig_tree_row = next(line for line in lines if ",Fig Tree,Gilbeys," in line)
+        self.assertIn(",10.00,6000.00,1500.00", empire_row)
+        self.assertIn(",2.00,1100.00,200.00", fig_tree_row)
+        self.assertNotIn("Blue Ice", csv_text)
 
     def test_csv_export_refuses_a_manager(self):
         self.client.force_login(self.fig_manager)
         self.assertEqual(self.client.get(reverse("product_report_csv")).status_code, 403)
 
-    def test_all_shops_profit_workbook_includes_sales_and_expense_net_profit(self):
-        expense_day = timezone.localdate() - timedelta(days=1)
-        ShopExpense.objects.create(
-            shop=self.fig_tree,
-            expense_date=expense_day,
-            description="Transport",
-            amount=Decimal("50.00"),
-            recorded_by=self.fig_manager,
-        )
+    def test_daily_sales_workbook_matches_the_preview_data(self):
         self.client.force_login(self.owner)
         response = self.client.get(reverse("all_shops_profit_workbook"))
         self.assertEqual(response.status_code, 200)
@@ -1138,27 +1209,21 @@ class ProductReportTests(BaseDataTestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
-        self.assertEqual(
-            workbook.sheetnames,
-            ["Shop Summary", "Product Sales", "Expenses", "Daily Net Profit"],
-        )
-        summary = list(workbook["Shop Summary"].values)
-        fig_tree_row = next(row for row in summary if row[0] == "Fig Tree")
-        self.assertEqual(fig_tree_row[4], Decimal("200.00"))
-        self.assertEqual(fig_tree_row[5], Decimal("50.00"))
-        self.assertEqual(fig_tree_row[6], Decimal("150.00"))
-        expense_row = next(row for row in list(workbook["Expenses"].values)[1:] if row[2] == "Transport")
-        self.assertEqual(expense_row[0].date(), expense_day)
-        self.assertEqual(expense_row[1], "Fig Tree")
-        self.assertEqual(expense_row[3], 50)
-        self.assertEqual(expense_row[4], "figtree")
+        self.assertEqual(workbook.sheetnames, ["Summary", "Daily Sales"])
 
-        daily_row = next(
-            row for row in list(workbook["Daily Net Profit"].values)[2:]
-            if row[0].date() == expense_day and row[1] == "Fig Tree"
-        )
-        self.assertEqual(daily_row[6], 50)
-        self.assertEqual(daily_row[7], -50)
+        rows = list(workbook["Daily Sales"].values)[1:]
+        self.assertEqual(len(rows), 2)
+        empire_row = next(row for row in rows if row[1] == "Empire Shop")
+        fig_tree_row = next(row for row in rows if row[1] == "Fig Tree")
+        self.assertEqual(empire_row[4], 10)
+        self.assertEqual(empire_row[5], 6000)
+        self.assertEqual(empire_row[6], 1500)
+        self.assertEqual(fig_tree_row[4], 2)
+        self.assertEqual(fig_tree_row[5], 1100)
+        self.assertEqual(fig_tree_row[6], 200)
+
+        totals = list(workbook["Summary"].values)[4]
+        self.assertEqual(totals, (12, 7100, 1700, None))
 
     def test_all_shops_profit_workbook_refuses_a_manager(self):
         self.client.force_login(self.fig_manager)
@@ -1181,14 +1246,14 @@ class ProductReportTests(BaseDataTestCase):
         preview = self.client.get(reverse("product_report"), params)
         self.assertEqual(preview.context["profit_start_date"], today.isoformat())
         self.assertEqual(preview.context["profit_end_date"], today.isoformat())
-        self.assertEqual(preview.context["product_sales_count"], 2)
+        self.assertEqual(preview.context["daily_count"], 2)
         self.assertContains(preview, f"{today.isoformat()} to {today.isoformat()}")
-        self.assertContains(preview, "Workbook preview")
+        self.assertContains(preview, "Daily sales preview")
 
         response = self.client.get(reverse("all_shops_profit_workbook"), params)
         self.assertIn(today.strftime("%Y%m%d"), response["Content-Disposition"])
         workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
-        sales_rows = list(workbook["Product Sales"].values)[2:]
+        sales_rows = list(workbook["Daily Sales"].values)[1:]
         self.assertEqual(len(sales_rows), 2)
         self.assertTrue(all(row[0].date() == today for row in sales_rows))
 
@@ -2562,19 +2627,37 @@ class ProductReportFilterTests(BaseDataTestCase):
     def test_filters_reach_the_csv_export(self):
         response = self.client.get(
             reverse("product_report_csv"),
-            {"product": "Gilbeys", "report_shop": self.empire.pk},
+            {"product": "Gilbeys", "report_shops": [self.empire.pk]},
         )
 
         self.assertEqual(response.status_code, 200)
-        lines = response.content.decode().splitlines()
+        csv_text = streamed_csv(response)
+        lines = csv_text.splitlines()
         self.assertEqual(
             lines[1],
-            "Product,Category,Empire Shop Units,Empire Shop Profit,"
-            "Total Units,Total Profit,Total Revenue",
+            "Date,Shop,Product,Category,Units Sold,Revenue (KSh),Profit (KSh)",
         )
         self.assertEqual(len(lines), 3)
-        self.assertTrue(lines[2].startswith("Gilbeys"))
-        self.assertNotIn("Fig Tree", response.content.decode())
+        self.assertIn(",Empire Shop,Gilbeys,250ml,", lines[2])
+        self.assertNotIn("Fig Tree", csv_text)
+
+    def test_selected_products_are_capped_at_seven_in_the_preview_and_exports(self):
+        extra_products = [
+            MasterProduct.objects.create(name=f"Extra {index}", category="250ml")
+            for index in range(8)
+        ]
+        selected_ids = [product.pk for product in extra_products]
+        params = {"products": selected_ids}
+
+        page = self.client.get(reverse("product_report"), params)
+        self.assertEqual(len(page.context["selected_products"]), 7)
+        self.assertEqual(page.context["selected_product_ids"], selected_ids[:7])
+        self.assertEqual(page.context["daily_count"], 0)
+
+        csv_lines = streamed_csv(
+            self.client.get(reverse("product_report_csv"), params)
+        ).splitlines()
+        self.assertEqual(len(csv_lines), 2)
 
 
 class ManualStockAdditionTests(BaseDataTestCase):

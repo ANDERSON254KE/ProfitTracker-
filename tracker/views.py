@@ -23,8 +23,8 @@ from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q, Sum
-from django.http import HttpResponse, JsonResponse
+from django.db.models import F, ProtectedError, Q, Sum
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -36,8 +36,6 @@ try:
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
-from openpyxl.styles import Alignment, Font, PatternFill
-
 from .forms import (
     DailySaleForm,
     DailySalesSheetForm,
@@ -78,6 +76,10 @@ MANAGER_HISTORY_ROWS = 15
 SHOP_DETAIL_PAGE_SIZE = 30
 #: Products in a shop's "most sold" report.
 SHOP_TOP_PRODUCTS = 10
+#: Daily rows rendered in the product report preview before downloading.
+REPORT_PREVIEW_ROWS = 20
+#: Products that can be selected in the product report.
+REPORT_PRODUCT_LIMIT = 7
 #: Kenyan shillings symbol used by the ``ksh`` template filter.
 CURRENCY = "KSh"
 
@@ -170,6 +172,26 @@ def _parse_date(value):
         return parse_date(value or "")
     except (TypeError, ValueError):
         return None
+
+
+def _parse_int_values(values, limit=None):
+    """Return unique positive integer ids from repeated query values."""
+    ids = []
+    for raw in values:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in ids:
+            ids.append(value)
+    return ids[:limit] if limit is not None else ids
+
+
+def _csv_row(values):
+    """Render one CSV line without holding the whole file in memory."""
+    buffer = StringIO()
+    csv.writer(buffer, lineterminator="\r\n").writerow(values)
+    return buffer.getvalue()
 
 
 def _shop_sales(shop):
@@ -600,6 +622,29 @@ class WorkerProfileUpdateView(OwnerRequiredMixin, TemplateView):
         return self.render_to_response(
             self.get_context_data(form=form, worker=worker)
         )
+
+
+class WorkerProfileDeleteView(OwnerRequiredMixin, View):
+    """Delete a shop manager when no recorded activity still references them."""
+
+    def post(self, request, *args, **kwargs):
+        worker = get_object_or_404(
+            CustomUser, pk=kwargs["pk"], role=CustomUser.Role.MANAGER
+        )
+        label = worker.get_full_name() or worker.username
+        old_shop = worker.assigned_shop
+        try:
+            worker.delete()
+        except ProtectedError:
+            messages.error(
+                request,
+                f"Could not delete {label}: sales, expenses or stock entries are "
+                "linked to this account. Deactivate them instead.",
+            )
+        else:
+            _sync_shop_manager(old_shop)
+            messages.success(request, f"Deleted {label}'s profile.")
+        return redirect("worker_profiles")
 
 
 class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
@@ -1789,14 +1834,19 @@ class ProductComparisonCSVView(OwnerRequiredMixin, View):
         return response
 
 
-def _product_report_rows(start_date=None, end_date=None, shop_ids=None, product_query=None, product_ids=None):
+def _product_report_rows(
+    start_date=None, end_date=None, shop_ids=None, product_query=None,
+    product_ids=None, shops=None,
+):
     """Return ``(shops, rows)`` for products-by-shop within an optional date range."""
-    shops = list(Shop.objects.all().order_by("name"))
-    if shop_ids:
+    shops = list(Shop.objects.all().order_by("name")) if shops is None else list(shops)
+    if shop_ids is not None:
         shops = [shop for shop in shops if shop.pk in shop_ids]
-    sales = DailySale.objects.all()
-    if shop_ids:
+    sales = DailySale.objects.order_by()
+    if shops:
         sales = sales.filter(shop_id__in=[shop.pk for shop in shops])
+    elif shop_ids:
+        sales = sales.none()
     if start_date is not None and end_date is not None:
         sales = sales.filter(sale_date__range=(start_date, end_date))
     if product_ids:
@@ -1927,9 +1977,15 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
     # running total per shop/product so each row's "since" figures are a
     # subtraction rather than another query.
     first_day = min(item["date"] for item in additions)
+    relevant_pairs = {(item["shop"].pk, item["product"].pk) for item in additions}
+    pair_filter = Q()
+    for shop_pk, product_pk in relevant_pairs:
+        pair_filter |= Q(shop_id=shop_pk, product_id=product_pk)
     per_day = {}
     for row in (
-        DailySale.objects.filter(sale_date__range=(first_day, today))
+        DailySale.objects.order_by()
+        .filter(sale_date__range=(first_day, today))
+        .filter(pair_filter)
         .values("shop_id", "product_id", "sale_date")
         .annotate(
             units=Sum("units_sold"),
@@ -2009,114 +2065,216 @@ def _stock_batch_profit_rows(start_date, end_date, shop_ids=None):
     return rows
 
 
-def _all_shops_profit_report(start_date, end_date):
-    """Build the shared date-filtered data used by the report preview and XLSX."""
-    shops = list(Shop.objects.all().order_by("name"))
-    sales = list(
-        DailySale.objects.filter(sale_date__range=(start_date, end_date))
-        .select_related("shop", "product")
-        .order_by("sale_date", "shop__name", "product__name", "product__category", "pk")
-    )
-    expenses = list(
-        ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
-        .select_related("shop", "recorded_by")
-        .order_by("expense_date", "shop__name", "pk")
-    )
-
-    sales_by_shop = {
-        row["shop_id"]: row
-        for row in DailySale.objects.filter(sale_date__range=(start_date, end_date))
-        .values("shop_id")
-        .annotate(
-            units=Sum("units_sold"), revenue=Sum("total_revenue"),
-            cost=Sum("total_cost"), profit=Sum("profit"),
-        )
-    }
-    expenses_by_shop = {
-        row["shop_id"]: _money(row["amount"])
-        for row in ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
-        .values("shop_id")
-        .annotate(amount=Sum("amount"))
-    }
-    daily_sales = {
-        (row["sale_date"], row["shop_id"]): row
-        for row in DailySale.objects.filter(sale_date__range=(start_date, end_date))
-        .values("sale_date", "shop_id")
-        .annotate(
-            units=Sum("units_sold"), revenue=Sum("total_revenue"),
-            cost=Sum("total_cost"), profit=Sum("profit"),
-        )
-    }
-    daily_expenses = {
-        (row["expense_date"], row["shop_id"]): _money(row["amount"])
-        for row in ShopExpense.objects.filter(expense_date__range=(start_date, end_date))
-        .values("expense_date", "shop_id")
-        .annotate(amount=Sum("amount"))
-    }
-
-    summary_rows = []
-    for shop in shops:
-        sales_row = sales_by_shop.get(shop.pk, {})
-        gross = _money(sales_row.get("profit"))
-        expenses_total = expenses_by_shop.get(shop.pk, Decimal("0.00"))
-        summary_rows.append({
-            "shop": shop,
-            "units": _money(sales_row.get("units")),
-            "revenue": _money(sales_row.get("revenue")),
-            "cost": _money(sales_row.get("cost")),
-            "gross": gross,
-            "expenses": expenses_total,
-            "net": gross - expenses_total,
-        })
-
-    shops_by_id = {shop.pk: shop for shop in shops}
-    daily_rows = []
-    for day, shop_id in sorted(set(daily_sales) | set(daily_expenses)):
-        sales_row = daily_sales.get((day, shop_id), {})
-        gross = _money(sales_row.get("profit"))
-        expenses_total = daily_expenses.get((day, shop_id), Decimal("0.00"))
-        daily_rows.append({
-            "date": day,
-            "shop": shops_by_id[shop_id],
-            "units": _money(sales_row.get("units")),
-            "revenue": _money(sales_row.get("revenue")),
-            "cost": _money(sales_row.get("cost")),
-            "gross": gross,
-            "expenses": expenses_total,
-            "net": gross - expenses_total,
-        })
-
-    all_gross = sum((row["gross"] for row in summary_rows), Decimal("0.00"))
-    all_expenses = sum((row["expenses"] for row in summary_rows), Decimal("0.00"))
-    summary_totals = {
-        "units": sum((row["units"] for row in summary_rows), Decimal("0.00")),
-        "revenue": sum((row["revenue"] for row in summary_rows), Decimal("0.00")),
-        "cost": sum((row["cost"] for row in summary_rows), Decimal("0.00")),
-        "gross": all_gross,
-        "expenses": all_expenses,
-        "net": all_gross - all_expenses,
-    }
-    return {
-        "shops": shops,
-        "sales": sales,
-        "expenses": expenses,
-        "summary_rows": summary_rows,
-        "summary_totals": summary_totals,
-        "daily_rows": daily_rows,
-    }
-
-
 def _all_shops_profit_date_range(request):
     """Return a valid date range, defaulting to all recorded history through today."""
     today = timezone.localdate()
+    start_date = _parse_date(request.GET.get("start_date"))
+    end_date = _parse_date(request.GET.get("end_date"))
+    if start_date and end_date:
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+        return start_date, end_date
     first_sale = DailySale.objects.order_by("sale_date").values_list("sale_date", flat=True).first()
     first_expense = ShopExpense.objects.order_by("expense_date").values_list("expense_date", flat=True).first()
     earliest = min((day for day in (first_sale, first_expense) if day), default=today)
-    start_date = _parse_date(request.GET.get("start_date")) or earliest
-    end_date = _parse_date(request.GET.get("end_date")) or today
+    start_date = start_date or earliest
+    end_date = end_date or today
     if start_date > end_date:
         start_date, end_date = end_date, start_date
     return start_date, end_date
+
+
+def _report_request_filters(request):
+    """Resolve the shared filters used by the report page and its downloads."""
+    start_date, end_date = _all_shops_profit_date_range(request)
+    all_shops = list(Shop.objects.all().order_by("name"))
+    selected_shop_ids = _parse_int_values(request.GET.getlist("report_shops"))
+    if not selected_shop_ids:
+        selected_shop_ids = _parse_int_values([request.GET.get("report_shop")])
+    selected_shop_ids = set(selected_shop_ids)
+    shops = [shop for shop in all_shops if shop.pk in selected_shop_ids]
+    product_ids = _parse_int_values(
+        request.GET.getlist("products"), limit=REPORT_PRODUCT_LIMIT
+    )
+    product_query = (request.GET.get("product") or "").strip()
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "all_shops": all_shops,
+        "shops": shops,
+        "shop_ids": {shop.pk for shop in shops},
+        "product_ids": product_ids,
+        "product_query": product_query,
+    }
+
+
+def _daily_sales_queryset(filters):
+    """Return the filtered DailySale rows behind the daily sales report."""
+    sales = DailySale.objects.order_by()
+    if filters["start_date"] and filters["end_date"]:
+        sales = sales.filter(
+            sale_date__range=(filters["start_date"], filters["end_date"])
+        )
+    if filters["shop_ids"]:
+        sales = sales.filter(shop_id__in=filters["shop_ids"])
+    if filters["product_ids"]:
+        sales = sales.filter(product_id__in=filters["product_ids"])
+    if filters["product_query"]:
+        sales = sales.filter(
+            Q(product__name__icontains=filters["product_query"])
+            | Q(product__category__icontains=filters["product_query"])
+        )
+    return sales
+
+
+def _daily_sales_rows(sales):
+    """Group filtered sales into one row per day, shop and product."""
+    return (
+        sales.annotate(
+            shop_name=F("shop__name"),
+            product_name=F("product__name"),
+            product_category=F("product__category"),
+        )
+        .values(
+            "sale_date",
+            "shop_id",
+            "shop_name",
+            "product_id",
+            "product_name",
+            "product_category",
+        )
+        .annotate(
+            units=Sum("units_sold"),
+            revenue=Sum("total_revenue"),
+            profit=Sum("profit"),
+        )
+        .order_by("-sale_date", "shop_name", "product_name", "product_category")
+    )
+
+
+def _daily_sales_report(filters):
+    """Build a bounded preview plus totals from the filtered daily rows."""
+    sales = _daily_sales_queryset(filters)
+    grouped = _daily_sales_rows(sales)
+    totals = sales.aggregate(
+        units=Sum("units_sold"),
+        revenue=Sum("total_revenue"),
+        profit=Sum("profit"),
+    )
+    return {
+        "rows": list(grouped[:REPORT_PREVIEW_ROWS]),
+        "count": grouped.count(),
+        "totals": {
+            "units": _money(totals["units"]),
+            "revenue": _money(totals["revenue"]),
+            "profit": _money(totals["profit"]),
+        },
+    }
+
+
+def _report_export_params(filters):
+    """Carry the current report filters into CSV and workbook links."""
+    params = [
+        ("start_date", filters["start_date"].isoformat()),
+        ("end_date", filters["end_date"].isoformat()),
+    ]
+    for shop in filters["shops"]:
+        params.append(("report_shops", str(shop.pk)))
+    if filters["product_query"]:
+        params.append(("product", filters["product_query"]))
+    for product_id in filters["product_ids"]:
+        params.append(("products", str(product_id)))
+    return params
+
+
+def _daily_sales_csv_response(filters):
+    """Stream the full filtered daily report as CSV."""
+    rows = _daily_sales_rows(_daily_sales_queryset(filters))
+
+    def lines():
+        yield _csv_row([
+            "From", filters["start_date"].isoformat(),
+            "To", filters["end_date"].isoformat(),
+        ])
+        yield _csv_row([
+            "Date", "Shop", "Product", "Category",
+            "Units Sold", "Revenue (KSh)", "Profit (KSh)",
+        ])
+        for row in rows.iterator(chunk_size=2000):
+            yield _csv_row([
+                row["sale_date"].isoformat(),
+                row["shop_name"],
+                row["product_name"],
+                row["product_category"],
+                f"{_money(row['units']):.2f}",
+                f"{_money(row['revenue']):.2f}",
+                f"{_money(row['profit']):.2f}",
+            ])
+
+    response = StreamingHttpResponse(lines(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = (
+        f'attachment; filename="daily_sales_{filters["start_date"]:%Y%m%d}_{filters["end_date"]:%Y%m%d}.csv"'
+    )
+    return response
+
+
+def _daily_sales_workbook_response(filters):
+    """Build a filtered daily report workbook with a small summary sheet."""
+    rows = _daily_sales_rows(_daily_sales_queryset(filters))
+    totals = _daily_sales_queryset(filters).aggregate(
+        units=Sum("units_sold"),
+        revenue=Sum("total_revenue"),
+        profit=Sum("profit"),
+    )
+    selected_products = list(
+        MasterProduct.objects.filter(pk__in=filters["product_ids"]).order_by(
+            "name", "category"
+        )
+    )
+    shop_names = ", ".join(shop.name for shop in filters["shops"]) or "All shops"
+    product_names = ", ".join(
+        f"{product.name} · {product.category}" if product.category else product.name
+        for product in selected_products
+    ) or (f"Search: {filters['product_query']}" if filters["product_query"] else "All products")
+
+    workbook = Workbook(write_only=True)
+    summary = workbook.create_sheet("Summary")
+    summary.append(["From", filters["start_date"].isoformat(), "To", filters["end_date"].isoformat()])
+    summary.append(["Shops", shop_names])
+    summary.append(["Products", product_names])
+    summary.append(["Units Sold", "Revenue (KSh)", "Profit (KSh)"])
+    summary.append([
+        _money(totals["units"]),
+        _money(totals["revenue"]),
+        _money(totals["profit"]),
+    ])
+
+    sheet = workbook.create_sheet("Daily Sales")
+    sheet.append([
+        "Date", "Shop", "Product", "Category",
+        "Units Sold", "Revenue (KSh)", "Profit (KSh)",
+    ])
+    for row in rows.iterator(chunk_size=2000):
+        sheet.append([
+            row["sale_date"],
+            row["shop_name"],
+            row["product_name"],
+            row["product_category"],
+            _money(row["units"]),
+            _money(row["revenue"]),
+            _money(row["profit"]),
+        ])
+
+    output = BytesIO()
+    workbook.save(output)
+    response = HttpResponse(
+        output.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="daily_sales_{filters["start_date"]:%Y%m%d}_{filters["end_date"]:%Y%m%d}.xlsx"'
+    )
+    return response
 
 
 class ProductReportView(OwnerRequiredMixin, TemplateView):
@@ -2184,47 +2342,31 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        start_date, end_date = _all_shops_profit_date_range(self.request)
-        selected_shop_id = self.request.GET.get("report_shop") or ""
-        product_query = (self.request.GET.get("product") or "").strip()
-        raw_product_ids = self.request.GET.getlist("products")
-        selected_product_ids = []
-        for raw in raw_product_ids:
-            try:
-                pid = int(raw)
-            except (TypeError, ValueError):
-                continue
-            if pid not in selected_product_ids:
-                selected_product_ids.append(pid)
-        selected_product_ids = selected_product_ids[:7]
-
-        shop_ids = None
-        selected_report_shop = None
-        if selected_shop_id:
-            try:
-                selected_report_shop = Shop.objects.get(pk=int(selected_shop_id))
-                shop_ids = {selected_report_shop.pk}
-            except (Shop.DoesNotExist, ValueError, TypeError):
-                selected_shop_id = ""
-
+        filters = _report_request_filters(self.request)
+        start_date = filters["start_date"]
+        end_date = filters["end_date"]
         shops, rows = _product_report_rows(
             start_date,
             end_date,
-            shop_ids=shop_ids,
-            product_query=product_query,
-            product_ids=selected_product_ids or None,
+            product_query=filters["product_query"],
+            product_ids=filters["product_ids"] or None,
+            shops=filters["shops"] or None,
         )
-        profit_report = _all_shops_profit_report(start_date, end_date)
+        daily_report = _daily_sales_report(filters)
         all_products = list(MasterProduct.objects.all().order_by("name", "category"))
-        selected_products = [p for p in all_products if p.pk in selected_product_ids]
-        context["all_shops"] = list(Shop.objects.all().order_by("name"))
+        selected_products = [
+            product for product in all_products
+            if product.pk in filters["product_ids"]
+        ]
+        context["all_shops"] = filters["all_shops"]
         context["all_products"] = all_products
-        context["selected_product_ids"] = selected_product_ids
+        context["selected_shop_ids"] = filters["shop_ids"]
+        context["selected_report_shops"] = filters["shops"]
+        context["selected_product_ids"] = filters["product_ids"]
         context["selected_products"] = selected_products
         context["shops"] = shops
         context["rows"] = rows
-        context["selected_report_shop"] = selected_report_shop
-        context["product_query"] = product_query
+        context["product_query"] = filters["product_query"]
 
         shop_totals = []
         grand_total = Decimal("0.00")
@@ -2236,31 +2378,16 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             grand_total += profit
         context["shop_totals"] = shop_totals
         context["grand_total"] = grand_total
-        export_params = [
-            ("start_date", start_date.isoformat()),
-            ("end_date", end_date.isoformat()),
-        ]
-        if selected_shop_id:
-            export_params.append(("report_shop", selected_shop_id))
-        if product_query:
-            export_params.append(("product", product_query))
-        for pid in selected_product_ids:
-            export_params.append(("products", str(pid)))
-        context["csv_export_url"] = f"{reverse('product_report_csv')}?{urlencode(export_params)}"
+        export_params = _report_export_params(filters)
+        query = urlencode(export_params)
+        context["csv_export_url"] = f"{reverse('product_report_csv')}?{query}"
+        context["profit_workbook_url"] = f"{reverse('all_shops_profit_workbook')}?{query}"
         context["profit_start_date"] = start_date.isoformat()
         context["profit_end_date"] = end_date.isoformat()
-        context["profit_report"] = profit_report
-        context["product_preview"] = profit_report["sales"][:10]
-        context["expense_preview"] = profit_report["expenses"][:10]
-        context["daily_preview"] = profit_report["daily_rows"][:10]
-        context["product_sales_count"] = len(profit_report["sales"])
-        context["expense_count"] = len(profit_report["expenses"])
-        context["daily_count"] = len(profit_report["daily_rows"])
-        workbook_params = urlencode({
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-        })
-        context["profit_workbook_url"] = f"{reverse('all_shops_profit_workbook')}?{workbook_params}"
+        context["daily_preview"] = daily_report["rows"]
+        context["daily_count"] = daily_report["count"]
+        context["daily_totals"] = daily_report["totals"]
+        context["report_preview_limit"] = REPORT_PREVIEW_ROWS
 
         # --- Stock-batch profit: sales since each stock addition, to today ---
         today = timezone.localdate()
@@ -2313,31 +2440,41 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
 class ShopProfitCSVView(OwnerRequiredMixin, View):
     """Download a slim profit sheet: one row per shop with its net profit.
 
-    Covers the selected date range (and, when ``report_shop`` is given, just
-    that shop). Only the shop name and its profit amount are exported.
+    Covers the selected date range and only the shops chosen in the report.
     """
 
     def get(self, request, *args, **kwargs):
-        start_date, end_date = _all_shops_profit_date_range(request)
-        selected_shop_id = request.GET.get("report_shop") or ""
-        report = _all_shops_profit_report(start_date, end_date)
-        rows = report["summary_rows"]
-        if selected_shop_id:
-            try:
-                selected_id = int(selected_shop_id)
-                rows = [row for row in rows if row["shop"].pk == selected_id]
-            except (TypeError, ValueError):
-                pass
+        filters = _report_request_filters(request)
+        start_date = filters["start_date"]
+        end_date = filters["end_date"]
+        sales_by_shop = {
+            row["shop_id"]: _money(row["profit"])
+            for row in DailySale.objects.order_by()
+            .filter(sale_date__range=(start_date, end_date))
+            .values("shop_id")
+            .annotate(profit=Sum("profit"))
+        }
+        expenses_by_shop = {
+            row["shop_id"]: _money(row["amount"])
+            for row in ShopExpense.objects.order_by()
+            .filter(expense_date__range=(start_date, end_date))
+            .values("shop_id")
+            .annotate(amount=Sum("amount"))
+        }
 
         output = StringIO()
         writer = csv.writer(output)
         writer.writerow(["From", start_date.isoformat(), "To", end_date.isoformat()])
         writer.writerow(["Shop", "Profit"])
         total = Decimal("0.00")
-        for row in rows:
-            writer.writerow([row["shop"].name, f"{row['net']:.2f}"])
-            total += row["net"]
-        writer.writerow(["All shops", f"{total:.2f}"])
+        for shop in filters["shops"]:
+            net = (
+                sales_by_shop.get(shop.pk, Decimal("0.00"))
+                - expenses_by_shop.get(shop.pk, Decimal("0.00"))
+            )
+            writer.writerow([shop.name, f"{net:.2f}"])
+            total += net
+        writer.writerow(["Shops", f"{total:.2f}"])
 
         response = HttpResponse(output.getvalue(), content_type="text/csv")
         response["Content-Disposition"] = (
@@ -2347,152 +2484,17 @@ class ShopProfitCSVView(OwnerRequiredMixin, View):
 
 
 class ProductReportCSVView(OwnerRequiredMixin, View):
-    """Download the all-products cross-shop report for a selected date range."""
+    """Stream the previewed daily sales and profits as CSV."""
 
     def get(self, request, *args, **kwargs):
-        start_date, end_date = _all_shops_profit_date_range(request)
-        selected_shop_id = request.GET.get("report_shop") or ""
-        product_query = (request.GET.get("product") or "").strip()
-        raw_product_ids = request.GET.getlist("products")
-        selected_product_ids = []
-        for raw in raw_product_ids:
-            try:
-                pid = int(raw)
-            except (TypeError, ValueError):
-                continue
-            if pid not in selected_product_ids:
-                selected_product_ids.append(pid)
-        selected_product_ids = selected_product_ids[:7]
-        shop_ids = None
-        if selected_shop_id:
-            try:
-                shop_ids = {int(selected_shop_id)}
-            except (TypeError, ValueError):
-                shop_ids = None
-        shops, rows = _product_report_rows(
-            start_date,
-            end_date,
-            shop_ids=shop_ids,
-            product_query=product_query,
-            product_ids=selected_product_ids or None,
-        )
-        output = StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["From", start_date.isoformat(), "To", end_date.isoformat()])
-        header = ["Product", "Category"]
-        for shop in shops:
-            header += [f"{shop.name} Units", f"{shop.name} Profit"]
-        header += ["Total Units", "Total Profit", "Total Revenue"]
-        writer.writerow(header)
-        for row in rows:
-            line = [row["product"].name, row["product"].category]
-            for cell in row["shop_cells"]:
-                line += [f"{cell['units']:.2f}", f"{cell['profit']:.2f}"]
-            line += [
-                f"{row['total_units']:.2f}",
-                f"{row['total_profit']:.2f}",
-                f"{row['total_revenue']:.2f}",
-            ]
-            writer.writerow(line)
-
-        response = HttpResponse(output.getvalue(), content_type="text/csv")
-        response["Content-Disposition"] = (
-            f'attachment; filename="product_report_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv"'
-        )
-        return response
+        return _daily_sales_csv_response(_report_request_filters(request))
 
 
 class AllShopsProfitWorkbookView(OwnerRequiredMixin, View):
-    """Download all shops' product profits and expenses for a date range."""
+    """Download the previewed daily sales and profits as an XLSX workbook."""
 
     def get(self, request, *args, **kwargs):
-        start_date, end_date = _all_shops_profit_date_range(request)
-        data = _all_shops_profit_report(start_date, end_date)
-
-        workbook = Workbook()
-        summary = workbook.active
-        summary.title = "Shop Summary"
-        summary.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
-        summary.append([
-            "Shop", "Units Sold", "Revenue (KSh)", "Product Cost (KSh)",
-            "Gross Profit (KSh)", "Expenses (KSh)", "Net Profit (KSh)",
-        ])
-        for row in data["summary_rows"]:
-            summary.append([
-                row["shop"].name, row["units"], row["revenue"], row["cost"],
-                row["gross"], row["expenses"], row["net"],
-            ])
-        totals = data["summary_totals"]
-        summary.append([
-            "ALL SHOPS", totals["units"], totals["revenue"], totals["cost"],
-            totals["gross"], totals["expenses"], totals["net"],
-        ])
-
-        product_sheet = workbook.create_sheet("Product Sales")
-        product_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
-        product_sheet.append([
-            "Date", "Shop", "Product", "Category", "Units Sold", "Unit Cost (KSh)",
-            "Unit Selling Price (KSh)", "Revenue (KSh)", "Product Cost (KSh)", "Profit (KSh)",
-        ])
-        for sale in data["sales"]:
-            product_sheet.append([
-                sale.sale_date, sale.shop.name, sale.product.name, sale.product.category,
-                sale.units_sold, sale.unit_cost_at_sale, sale.unit_price_at_sale,
-                sale.total_revenue, sale.total_cost, sale.profit,
-            ])
-
-        expense_sheet = workbook.create_sheet("Expenses")
-        expense_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
-        expense_sheet.append(["Date", "Shop", "Description", "Amount (KSh)", "Recorded By"])
-        for expense in data["expenses"]:
-            expense_sheet.append([
-                expense.expense_date, expense.shop.name, expense.description,
-                expense.amount, expense.recorded_by.username,
-            ])
-
-        daily_sheet = workbook.create_sheet("Daily Net Profit")
-        daily_sheet.append(["Date Range", start_date.isoformat(), "to", end_date.isoformat()])
-        daily_sheet.append([
-            "Date", "Shop", "Units Sold", "Revenue (KSh)", "Product Cost (KSh)",
-            "Gross Profit (KSh)", "Expenses (KSh)", "Net Profit (KSh)",
-        ])
-        for row in data["daily_rows"]:
-            daily_sheet.append([
-                row["date"], row["shop"].name, row["units"], row["revenue"],
-                row["cost"], row["gross"], row["expenses"], row["net"],
-            ])
-
-        money_format = '"KSh" #,##0.00;[Red]-"KSh" #,##0.00'
-        for sheet in workbook.worksheets:
-            sheet.freeze_panes = "A3"
-            sheet.auto_filter.ref = (
-                f"A2:{sheet.cell(sheet.max_row, sheet.max_column).coordinate}"
-            )
-            for cell in sheet[2]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill("solid", fgColor="1E293B")
-                cell.alignment = Alignment(vertical="center")
-            for column in sheet.columns:
-                letter = column[0].column_letter
-                width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 36)
-                sheet.column_dimensions[letter].width = width
-            for row in sheet.iter_rows(min_row=3):
-                for cell in row:
-                    if hasattr(cell.value, "year") and hasattr(cell.value, "month"):
-                        cell.number_format = "yyyy-mm-dd"
-                    if isinstance(cell.value, Decimal):
-                        cell.number_format = money_format
-
-        output = BytesIO()
-        workbook.save(output)
-        response = HttpResponse(
-            output.getvalue(),
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        response["Content-Disposition"] = (
-            f'attachment; filename="all_shops_profit_{start_date:%Y%m%d}_{end_date:%Y%m%d}.xlsx"'
-        )
-        return response
+        return _daily_sales_workbook_response(_report_request_filters(request))
 
 
 def _shop_report_data(shop):

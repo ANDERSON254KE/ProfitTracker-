@@ -14,7 +14,7 @@
 <div class="mb-6 grid gap-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
     <div>
         <h2 class="text-base font-semibold text-slate-900">Product sales filter</h2>
-        <p class="mt-1 text-sm text-slate-500">Pick up to 7 products to see units sold, revenue and profit across shops for {{ profit_start_date }} to {{ profit_end_date }}.</p>
+        <p class="mt-1 text-sm text-slate-500">Pick up to 7 products and the shops you want to see. Preview daily units sold, revenue and profit below, then download the same rows.</p>
         <form method="get" action="{% url 'product_report' %}" class="mt-4 space-y-3">
             <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
@@ -28,12 +28,12 @@
                            class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                 </div>
                 <div>
-                    <label for="reportShop" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shop</label>
-                    <select id="reportShop" name="report_shop"
+                    <label for="reportShops" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Shops</label>
+                    <select id="reportShops" name="report_shops" multiple size="4"
                             class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
-                        <option value="">All shops</option>
-                        {% for shop in all_shops %}<option value="{{ shop.pk }}"{% if selected_report_shop and selected_report_shop.pk == shop.pk %} selected{% endif %}>{{ shop.name }}</option>{% endfor %}
+                        {% for shop in all_shops %}<option value="{{ shop.pk }}"{% if shop.pk in selected_shop_ids %} selected{% endif %}>{{ shop.name }}</option>{% endfor %}
                     </select>
+                    <p class="mt-1 text-[11px] text-slate-500">Ctrl/Cmd-click to select shops. Leave empty for all shops.</p>
                 </div>
                 <div>
                     <label for="productSearch" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-600">Search</label>
@@ -58,13 +58,14 @@
                 <a href="{{ profit_workbook_url }}" download class="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600">Download workbook</a>
             </div>
         </form>
-        {% if selected_products %}
         <div class="mt-3 flex flex-wrap gap-2">
+            {% for shop in selected_report_shops %}
+            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{{ shop.name }}</span>
+            {% endfor %}
             {% for product in selected_products %}
             <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">{{ product.name }}{% if product.category %} · {{ product.category }}{% endif %}</span>
             {% endfor %}
         </div>
-        {% endif %}
     </div>
     <div class="flex flex-wrap items-end justify-between gap-3 border-t border-slate-200 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
         <div>
@@ -86,51 +87,52 @@
 </div>
 
 <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-    <div class="border-b border-slate-200 px-5 py-4">
-        <h2 class="text-base font-semibold text-slate-900">Workbook preview</h2>
-        <p class="mt-1 text-sm text-slate-500">{{ profit_start_date }} to {{ profit_end_date }}</p>
+    <div class="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">Daily sales preview</h2>
+            <p class="mt-1 text-sm text-slate-500">
+                {{ profit_start_date }} to {{ profit_end_date }} ·
+                {% if selected_report_shops %}{{ selected_report_shops|length }} selected shop{{ selected_report_shops|length|pluralize }}{% else %}All shops{% endif %} ·
+                {% if selected_products %}up to {{ selected_products|length }} products{% elif product_query %}Search: {{ product_query }}{% else %}All products{% endif %}
+            </p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{{ csv_export_url }}" download class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">Download CSV</a>
+            <a href="{{ profit_workbook_url }}" download class="rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-600">Download workbook</a>
+        </div>
     </div>
-    <details open class="border-b border-slate-200">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Shop Summary · {{ shops|length }} shops</summary>
-        <div class="overflow-x-auto px-5 pb-4">
-            <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
-                    <th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-right">Units</th><th class="px-3 py-2 text-right">Revenue</th><th class="px-3 py-2 text-right">Product Cost</th><th class="px-3 py-2 text-right">Gross Profit</th><th class="px-3 py-2 text-right">Expenses</th><th class="px-3 py-2 text-right">Net Profit</th>
-                </tr></thead>
-                <tbody class="divide-y divide-slate-100">
-                    {% for row in profit_report.summary_rows %}<tr><td class="px-3 py-2 font-medium">{{ row.shop.name }}</td><td class="px-3 py-2 text-right">{{ row.units|units }}</td><td class="px-3 py-2 text-right">{{ row.revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ row.cost|ksh }}</td><td class="px-3 py-2 text-right">{{ row.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ row.expenses|ksh }}</td><td class="px-3 py-2 text-right font-semibold">{{ row.net|ksh }}</td></tr>{% endfor %}
-                </tbody>
-                <tfoot class="border-t-2 border-slate-200 bg-slate-50 font-semibold"><tr><td class="px-3 py-2">All shops</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.units|units }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.cost|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.expenses|ksh }}</td><td class="px-3 py-2 text-right">{{ profit_report.summary_totals.net|ksh }}</td></tr></tfoot>
-            </table>
-        </div>
-    </details>
-    <details class="border-b border-slate-200">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Product Sales · {{ product_sales_count }} rows</summary>
-        <div class="overflow-x-auto px-5 pb-4">
-            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-left">Product</th><th class="px-3 py-2 text-right">Units</th><th class="px-3 py-2 text-right">Revenue</th><th class="px-3 py-2 text-right">Profit</th></tr></thead><tbody class="divide-y divide-slate-100">
-                {% for sale in product_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ sale.sale_date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ sale.shop.name }}</td><td class="px-3 py-2">{{ sale.product.name }}{% if sale.product.category %} · {{ sale.product.category }}{% endif %}</td><td class="px-3 py-2 text-right">{{ sale.units_sold|units }}</td><td class="px-3 py-2 text-right">{{ sale.total_revenue|ksh }}</td><td class="px-3 py-2 text-right">{{ sale.profit|ksh }}</td></tr>{% empty %}<tr><td colspan="6" class="px-3 py-5 text-center text-slate-500">No product sales in this period.</td></tr>{% endfor %}
-            </tbody></table>
-            {% if product_sales_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ product_sales_count }} rows. The download contains all rows.</p>{% endif %}
-        </div>
-    </details>
-    <details class="border-b border-slate-200">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Expenses · {{ expense_count }} rows</summary>
-        <div class="overflow-x-auto px-5 pb-4">
-            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-left">Description</th><th class="px-3 py-2 text-right">Amount</th><th class="px-3 py-2 text-left">Recorded By</th></tr></thead><tbody class="divide-y divide-slate-100">
-                {% for expense in expense_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ expense.expense_date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ expense.shop.name }}</td><td class="px-3 py-2">{{ expense.description }}</td><td class="px-3 py-2 text-right">{{ expense.amount|ksh }}</td><td class="px-3 py-2">{{ expense.recorded_by.username }}</td></tr>{% empty %}<tr><td colspan="5" class="px-3 py-5 text-center text-slate-500">No expenses in this period.</td></tr>{% endfor %}
-            </tbody></table>
-            {% if expense_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ expense_count }} rows. The download contains all rows.</p>{% endif %}
-        </div>
-    </details>
-    <details>
-        <summary class="cursor-pointer px-5 py-3 text-sm font-semibold text-slate-800">Daily Net Profit · {{ daily_count }} rows</summary>
-        <div class="overflow-x-auto px-5 pb-4">
-            <table class="min-w-full divide-y divide-slate-200 text-sm"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-right">Gross Profit</th><th class="px-3 py-2 text-right">Expenses</th><th class="px-3 py-2 text-right">Net Profit</th></tr></thead><tbody class="divide-y divide-slate-100">
-                {% for row in daily_preview %}<tr><td class="whitespace-nowrap px-3 py-2">{{ row.date|date:"Y-m-d" }}</td><td class="px-3 py-2">{{ row.shop.name }}</td><td class="px-3 py-2 text-right">{{ row.gross|ksh }}</td><td class="px-3 py-2 text-right">{{ row.expenses|ksh }}</td><td class="px-3 py-2 text-right font-semibold">{{ row.net|ksh }}</td></tr>{% empty %}<tr><td colspan="5" class="px-3 py-5 text-center text-slate-500">No sales or expenses in this period.</td></tr>{% endfor %}
-            </tbody></table>
-            {% if daily_count > 10 %}<p class="mt-2 text-xs text-slate-500">Showing 10 of {{ daily_count }} rows. The download contains all rows.</p>{% endif %}
-        </div>
-    </details>
+    <div class="grid gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:grid-cols-3">
+        <div><p class="text-xs uppercase tracking-wide text-slate-500">Units Sold</p><p class="text-lg font-semibold text-slate-900">{{ daily_totals.units|units }}</p></div>
+        <div><p class="text-xs uppercase tracking-wide text-slate-500">Revenue</p><p class="text-lg font-semibold text-slate-900">{{ daily_totals.revenue|ksh }}</p></div>
+        <div><p class="text-xs uppercase tracking-wide text-slate-500">Profit</p><p class="text-lg font-semibold {% if daily_totals.profit < 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">{{ daily_totals.profit|ksh }}</p></div>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+                <th class="px-3 py-2 text-left">Date</th><th class="px-3 py-2 text-left">Shop</th><th class="px-3 py-2 text-left">Product</th><th class="px-3 py-2 text-left">Category</th><th class="px-3 py-2 text-right">Units</th><th class="px-3 py-2 text-right">Revenue</th><th class="px-3 py-2 text-right">Profit</th>
+            </tr></thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in daily_preview %}
+                <tr>
+                    <td class="whitespace-nowrap px-3 py-2">{{ row.sale_date|date:"Y-m-d" }}</td>
+                    <td class="px-3 py-2">{{ row.shop_name }}</td>
+                    <td class="px-3 py-2 font-medium">{{ row.product_name }}</td>
+                    <td class="px-3 py-2 text-slate-500">{{ row.product_category|default:"—" }}</td>
+                    <td class="px-3 py-2 text-right">{{ row.units|units }}</td>
+                    <td class="px-3 py-2 text-right">{{ row.revenue|ksh }}</td>
+                    <td class="px-3 py-2 text-right font-semibold {% if row.profit < 0 %}text-rose-600{% elif row.profit > 0 %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ row.profit|ksh }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="7" class="px-3 py-5 text-center text-slate-500">No sales match these filters.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if daily_count > report_preview_limit %}
+    <p class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">Showing the first {{ report_preview_limit }} of {{ daily_count }} rows. The downloads contain all {{ daily_count }} rows.</p>
+    {% else %}
+    <p class="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">{{ daily_count }} row{{ daily_count|pluralize }} in this preview.</p>
+    {% endif %}
 </section>
 
 <section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -141,7 +143,7 @@
     <form method="get" action="{% url 'product_report' %}" class="flex flex-wrap items-end gap-3 border-b border-slate-200 px-5 py-4">
         <input type="hidden" name="start_date" value="{{ profit_start_date }}">
         <input type="hidden" name="end_date" value="{{ profit_end_date }}">
-        {% if selected_report_shop %}<input type="hidden" name="report_shop" value="{{ selected_report_shop.pk }}">{% endif %}
+        {% for shop in selected_report_shops %}<input type="hidden" name="report_shops" value="{{ shop.pk }}">{% endfor %}
         {% if product_query %}<input type="hidden" name="product" value="{{ product_query }}">{% endif %}
         {% for pid in selected_product_ids %}<input type="hidden" name="products" value="{{ pid }}">{% endfor %}
         <div>

@@ -28,6 +28,14 @@
                class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                 Cancel
             </a>
+            <form method="post" action="{% url 'worker_profile_delete' worker.pk %}"
+                  onsubmit="return confirm('Delete this worker profile?');">
+                {% csrf_token %}
+                <button type="submit"
+                        class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-100">
+                    Delete
+                </button>
+            </form>
         </div>
     </form>
 </section>

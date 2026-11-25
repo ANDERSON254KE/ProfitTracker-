@@ -35,6 +35,11 @@ urlpatterns = [
         views.WorkerProfileUpdateView.as_view(),
         name="worker_profile_edit",
     ),
+    path(
+        "owner/profiles/<int:pk>/delete/",
+        views.WorkerProfileDeleteView.as_view(),
+        name="worker_profile_delete",
+    ),
     # Manager area
     path(
         "manager/dashboard/",

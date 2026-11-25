@@ -559,6 +559,11 @@ class WorkerProfileForm(forms.ModelForm):
         widget=forms.PasswordInput(render_value=False),
         help_text="Required when adding a worker. Leave blank to keep the current password.",
     )
+    confirm_password = forms.CharField(
+        label="Confirm Password",
+        widget=forms.PasswordInput(render_value=False),
+        help_text="Repeat the password when setting or changing it.",
+    )
 
     class Meta:
         model = CustomUser
@@ -567,9 +572,15 @@ class WorkerProfileForm(forms.ModelForm):
             "last_name",
             "username",
             "email",
+            "id_number",
+            "residency",
+            "guardian_name",
+            "guardian_phone",
+            "guardian_id_number",
             "assigned_shop",
             "is_active",
             "password",
+            "confirm_password",
         ]
 
     def __init__(self, *args, **kwargs):
@@ -579,8 +590,15 @@ class WorkerProfileForm(forms.ModelForm):
         self.fields["assigned_shop"].required = True
         self.fields["assigned_shop"].queryset = Shop.objects.all()
         self.fields["password"].required = not self.instance.pk
+        self.fields["confirm_password"].required = not self.instance.pk
+        self.fields["confirm_password"].help_text = (
+            "Required when adding a worker. Leave blank to keep the current password."
+        )
         if self.instance.pk:
             self.fields["password"].help_text = (
+                "Leave blank to keep the current password."
+            )
+            self.fields["confirm_password"].help_text = (
                 "Leave blank to keep the current password."
             )
         for name, field in self.fields.items():
@@ -592,6 +610,8 @@ class WorkerProfileForm(forms.ModelForm):
                     "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 "
                     "py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500",
                 )
+        for name in ("password", "confirm_password"):
+            self.fields[name].widget.attrs["class"] += " pr-10"
 
     def clean_password(self):
         password = self.cleaned_data.get("password")
@@ -601,6 +621,12 @@ class WorkerProfileForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
+        password = cleaned.get("password")
+        confirmation = cleaned.get("confirm_password")
+        if password and password != confirmation:
+            self.add_error("confirm_password", "Passwords do not match.")
+        elif not password and confirmation:
+            self.add_error("confirm_password", "Enter a password to confirm.")
         shop = cleaned.get("assigned_shop")
         if cleaned.get("is_active") and shop:
             active = CustomUser.objects.filter(

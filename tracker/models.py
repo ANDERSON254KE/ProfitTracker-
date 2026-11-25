@@ -78,6 +78,21 @@ class CustomUser(AbstractUser):
         related_name="assigned_users",
         help_text="Only used for MANAGER users. Scopes everything they can see.",
     )
+    id_number = models.CharField(
+        "ID Number", max_length=50, blank=True, default=""
+    )
+    residency = models.CharField(
+        "Residency", max_length=255, blank=True, default=""
+    )
+    guardian_name = models.CharField(
+        "Guardian / Emergency Contact", max_length=255, blank=True, default=""
+    )
+    guardian_phone = models.CharField(
+        "Guardian / Emergency Contact Number", max_length=50, blank=True, default=""
+    )
+    guardian_id_number = models.CharField(
+        "Guardian / Emergency Contact ID Number", max_length=50, blank=True, default=""
+    )
 
     class Meta:
         verbose_name = "User"
@@ -275,7 +290,13 @@ class DailySale(models.Model):
 
     class Meta:
         ordering = ["-sale_date", "-id"]
-        indexes = [models.Index(fields=["shop", "-sale_date"], name="dailysale_shop_date_idx")]
+        indexes = [
+            models.Index(fields=["shop", "-sale_date"], name="dailysale_shop_date_idx"),
+            models.Index(
+                fields=["sale_date", "shop", "product"],
+                name="dailysale_date_shop_prod_idx",
+            ),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["shop", "product", "sale_date"],
