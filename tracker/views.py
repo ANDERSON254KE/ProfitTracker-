@@ -78,8 +78,8 @@ SHOP_DETAIL_PAGE_SIZE = 30
 SHOP_TOP_PRODUCTS = 10
 #: Daily rows rendered in the product report preview before downloading.
 REPORT_PREVIEW_ROWS = 20
-#: Products that can be selected in the product report.
-REPORT_PRODUCT_LIMIT = 7
+#: Product matches returned by the report's search picker.
+REPORT_PRODUCT_OPTIONS = 20
 #: Kenyan shillings symbol used by the ``ksh`` template filter.
 CURRENCY = "KSh"
 
@@ -2093,9 +2093,7 @@ def _report_request_filters(request):
         selected_shop_ids = _parse_int_values([request.GET.get("report_shop")])
     selected_shop_ids = set(selected_shop_ids)
     shops = [shop for shop in all_shops if shop.pk in selected_shop_ids]
-    product_ids = _parse_int_values(
-        request.GET.getlist("products"), limit=REPORT_PRODUCT_LIMIT
-    )
+    product_ids = _parse_int_values(request.GET.getlist("products"))
     product_query = (request.GET.get("product") or "").strip()
     return {
         "start_date": start_date,
@@ -2172,21 +2170,6 @@ def _daily_sales_report(filters):
     }
 
 
-def _report_export_params(filters):
-    """Carry the current report filters into CSV and workbook links."""
-    params = [
-        ("start_date", filters["start_date"].isoformat()),
-        ("end_date", filters["end_date"].isoformat()),
-    ]
-    for shop in filters["shops"]:
-        params.append(("report_shops", str(shop.pk)))
-    if filters["product_query"]:
-        params.append(("product", filters["product_query"]))
-    for product_id in filters["product_ids"]:
-        params.append(("products", str(product_id)))
-    return params
-
-
 def _daily_sales_csv_response(filters):
     """Stream the full filtered daily report as CSV."""
     rows = _daily_sales_rows(_daily_sales_queryset(filters))
@@ -2219,51 +2202,40 @@ def _daily_sales_csv_response(filters):
 
 
 def _daily_sales_workbook_response(filters):
-    """Build a filtered daily report workbook with a small summary sheet."""
-    rows = _daily_sales_rows(_daily_sales_queryset(filters))
-    totals = _daily_sales_queryset(filters).aggregate(
-        units=Sum("units_sold"),
-        revenue=Sum("total_revenue"),
-        profit=Sum("profit"),
-    )
-    selected_products = list(
-        MasterProduct.objects.filter(pk__in=filters["product_ids"]).order_by(
-            "name", "category"
-        )
-    )
-    shop_names = ", ".join(shop.name for shop in filters["shops"]) or "All shops"
-    product_names = ", ".join(
-        f"{product.name} · {product.category}" if product.category else product.name
-        for product in selected_products
-    ) or (f"Search: {filters['product_query']}" if filters["product_query"] else "All products")
+    """Build one worksheet per date in the filtered range."""
+    rows_by_date = {}
+    for row in _daily_sales_rows(_daily_sales_queryset(filters)):
+        rows_by_date.setdefault(row["sale_date"], []).append(row)
 
     workbook = Workbook(write_only=True)
-    summary = workbook.create_sheet("Summary")
-    summary.append(["From", filters["start_date"].isoformat(), "To", filters["end_date"].isoformat()])
-    summary.append(["Shops", shop_names])
-    summary.append(["Products", product_names])
-    summary.append(["Units Sold", "Revenue (KSh)", "Profit (KSh)"])
-    summary.append([
-        _money(totals["units"]),
-        _money(totals["revenue"]),
-        _money(totals["profit"]),
-    ])
-
-    sheet = workbook.create_sheet("Daily Sales")
-    sheet.append([
-        "Date", "Shop", "Product", "Category",
-        "Units Sold", "Revenue (KSh)", "Profit (KSh)",
-    ])
-    for row in rows.iterator(chunk_size=2000):
+    day = filters["start_date"]
+    while day <= filters["end_date"]:
+        sheet = workbook.create_sheet(day.isoformat())
+        day_rows = rows_by_date.get(day, [])
+        sheet.append([f"Date {day.isoformat()}"])
         sheet.append([
-            row["sale_date"],
-            row["shop_name"],
-            row["product_name"],
-            row["product_category"],
-            _money(row["units"]),
-            _money(row["revenue"]),
-            _money(row["profit"]),
+            "Product", "Category", "Shop",
+            "Units Sold", "Revenue (KSh)", "Profit (KSh)",
         ])
+        for row in day_rows:
+            sheet.append([
+                row["product_name"],
+                row["product_category"],
+                row["shop_name"],
+                _money(row["units"]),
+                _money(row["revenue"]),
+                _money(row["profit"]),
+            ])
+        if day_rows:
+            sheet.append([
+                "Total", "", "",
+                sum((_money(row["units"]) for row in day_rows), Decimal("0.00")),
+                sum((_money(row["revenue"]) for row in day_rows), Decimal("0.00")),
+                sum((_money(row["profit"]) for row in day_rows), Decimal("0.00")),
+            ])
+        else:
+            sheet.append(["No sales recorded.", "", "", "", "", ""])
+        day += timedelta(days=1)
 
     output = BytesIO()
     workbook.save(output)
@@ -2275,6 +2247,33 @@ def _daily_sales_workbook_response(filters):
         f'attachment; filename="daily_sales_{filters["start_date"]:%Y%m%d}_{filters["end_date"]:%Y%m%d}.xlsx"'
     )
     return response
+
+
+class ProductReportOptionsView(OwnerRequiredMixin, View):
+    """JSON product lookup for the report's search-and-add picker."""
+
+    def get(self, request):
+        query = (request.GET.get("q") or "").strip()
+        if len(query) < 2:
+            return JsonResponse({"results": []})
+        excluded_ids = _parse_int_values(request.GET.getlist("exclude"))
+        products = (
+            MasterProduct.objects.filter(
+                Q(name__icontains=query) | Q(category__icontains=query)
+            )
+            .exclude(pk__in=excluded_ids)
+            .order_by("name", "category")[:REPORT_PRODUCT_OPTIONS]
+        )
+        return JsonResponse({
+            "results": [
+                {
+                    "id": product.pk,
+                    "name": product.name,
+                    "category": product.category or "",
+                }
+                for product in products
+            ]
+        })
 
 
 class ProductReportView(OwnerRequiredMixin, TemplateView):
@@ -2353,13 +2352,12 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             shops=filters["shops"] or None,
         )
         daily_report = _daily_sales_report(filters)
-        all_products = list(MasterProduct.objects.all().order_by("name", "category"))
-        selected_products = [
-            product for product in all_products
-            if product.pk in filters["product_ids"]
-        ]
+        selected_products = list(
+            MasterProduct.objects.filter(pk__in=filters["product_ids"]).order_by(
+                "name", "category"
+            )
+        )
         context["all_shops"] = filters["all_shops"]
-        context["all_products"] = all_products
         context["selected_shop_ids"] = filters["shop_ids"]
         context["selected_report_shops"] = filters["shops"]
         context["selected_product_ids"] = filters["product_ids"]
@@ -2378,10 +2376,6 @@ class ProductReportView(OwnerRequiredMixin, TemplateView):
             grand_total += profit
         context["shop_totals"] = shop_totals
         context["grand_total"] = grand_total
-        export_params = _report_export_params(filters)
-        query = urlencode(export_params)
-        context["csv_export_url"] = f"{reverse('product_report_csv')}?{query}"
-        context["profit_workbook_url"] = f"{reverse('all_shops_profit_workbook')}?{query}"
         context["profit_start_date"] = start_date.isoformat()
         context["profit_end_date"] = end_date.isoformat()
         context["daily_preview"] = daily_report["rows"]

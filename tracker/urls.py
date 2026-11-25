@@ -80,6 +80,11 @@ urlpatterns = [
     ),
     # All-products cross-shop report with CSV export
     path(
+        "products/report/product-options/",
+        views.ProductReportOptionsView.as_view(),
+        name="product_report_options",
+    ),
+    path(
         "products/report/",
         views.ProductReportView.as_view(),
         name="product_report",

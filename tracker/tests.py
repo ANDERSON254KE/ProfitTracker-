@@ -1088,7 +1088,8 @@ class ProductReportTests(BaseDataTestCase):
         response = self.client.get(reverse("product_report"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'name="open_sheet_shop"')
-        self.assertContains(response, reverse("all_shops_profit_workbook"))
+        self.assertContains(response, f'formaction="{reverse("product_report_csv")}"')
+        self.assertContains(response, f'formaction="{reverse("all_shops_profit_workbook")}"')
         for shop in (self.fig_tree, self.empire):
             self.assertContains(response, f'value="{shop.pk}">{shop.name}</option>')
 
@@ -1209,21 +1210,22 @@ class ProductReportTests(BaseDataTestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
-        self.assertEqual(workbook.sheetnames, ["Summary", "Daily Sales"])
+        today = timezone.localdate()
+        self.assertEqual(workbook.sheetnames, [today.isoformat()])
 
-        rows = list(workbook["Daily Sales"].values)[1:]
-        self.assertEqual(len(rows), 2)
-        empire_row = next(row for row in rows if row[1] == "Empire Shop")
-        fig_tree_row = next(row for row in rows if row[1] == "Fig Tree")
-        self.assertEqual(empire_row[4], 10)
-        self.assertEqual(empire_row[5], 6000)
-        self.assertEqual(empire_row[6], 1500)
-        self.assertEqual(fig_tree_row[4], 2)
-        self.assertEqual(fig_tree_row[5], 1100)
-        self.assertEqual(fig_tree_row[6], 200)
-
-        totals = list(workbook["Summary"].values)[4]
-        self.assertEqual(totals, (12, 7100, 1700, None))
+        values = list(workbook[today.isoformat()].values)
+        self.assertEqual(values[0], (f"Date {today.isoformat()}", None, None, None, None, None))
+        rows = values[2:4]
+        self.assertEqual({row[0] for row in rows}, {"Gilbeys"})
+        empire_row = next(row for row in rows if row[2] == "Empire Shop")
+        fig_tree_row = next(row for row in rows if row[2] == "Fig Tree")
+        self.assertEqual(empire_row[3], 10)
+        self.assertEqual(empire_row[4], 6000)
+        self.assertEqual(empire_row[5], 1500)
+        self.assertEqual(fig_tree_row[3], 2)
+        self.assertEqual(fig_tree_row[4], 1100)
+        self.assertEqual(fig_tree_row[5], 200)
+        self.assertEqual(values[4], ("Total", None, None, 12, 7100, 1700))
 
     def test_all_shops_profit_workbook_refuses_a_manager(self):
         self.client.force_login(self.fig_manager)
@@ -1253,9 +1255,40 @@ class ProductReportTests(BaseDataTestCase):
         response = self.client.get(reverse("all_shops_profit_workbook"), params)
         self.assertIn(today.strftime("%Y%m%d"), response["Content-Disposition"])
         workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
-        sales_rows = list(workbook["Daily Sales"].values)[1:]
+        self.assertEqual(workbook.sheetnames, [today.isoformat()])
+        sales_rows = list(workbook[today.isoformat()].values)[2:4]
         self.assertEqual(len(sales_rows), 2)
-        self.assertTrue(all(row[0].date() == today for row in sales_rows))
+        self.assertEqual({row[0] for row in sales_rows}, {"Gilbeys"})
+
+    def test_workbook_has_one_sheet_per_filtered_date_and_only_selected_products(self):
+        DailySale.objects.create(
+            shop=self.fig_tree, product=self.blue_ice, units_sold=Decimal("5"),
+            unit_cost_at_sale=Decimal("150.00"), unit_price_at_sale=Decimal("200.00"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.owner)
+        today = timezone.localdate()
+        start = today - timedelta(days=9)
+        params = {
+            "start_date": start.isoformat(),
+            "end_date": today.isoformat(),
+            "products": [self.gilbeys.pk],
+        }
+
+        response = self.client.get(reverse("all_shops_profit_workbook"), params)
+        workbook = openpyxl.load_workbook(BytesIO(response.content), data_only=True)
+        expected_sheets = [(start + timedelta(days=index)).isoformat() for index in range(10)]
+        self.assertEqual(workbook.sheetnames, expected_sheets)
+
+        product_cells = []
+        for sheet in workbook.worksheets:
+            for row in list(sheet.values)[2:]:
+                if row[0] not in ("Total", "No sales recorded."):
+                    product_cells.append(row[0])
+        self.assertEqual(set(product_cells), {"Gilbeys"})
+
+        csv_text = streamed_csv(self.client.get(reverse("product_report_csv"), params))
+        self.assertNotIn("Blue Ice", csv_text)
 
 
 class ShopPricingTests(BaseDataTestCase):
@@ -2641,7 +2674,7 @@ class ProductReportFilterTests(BaseDataTestCase):
         self.assertIn(",Empire Shop,Gilbeys,250ml,", lines[2])
         self.assertNotIn("Fig Tree", csv_text)
 
-    def test_selected_products_are_capped_at_seven_in_the_preview_and_exports(self):
+    def test_selected_products_are_not_capped_in_the_preview_and_exports(self):
         extra_products = [
             MasterProduct.objects.create(name=f"Extra {index}", category="250ml")
             for index in range(8)
@@ -2650,14 +2683,36 @@ class ProductReportFilterTests(BaseDataTestCase):
         params = {"products": selected_ids}
 
         page = self.client.get(reverse("product_report"), params)
-        self.assertEqual(len(page.context["selected_products"]), 7)
-        self.assertEqual(page.context["selected_product_ids"], selected_ids[:7])
+        self.assertEqual(len(page.context["selected_products"]), 8)
+        self.assertEqual(page.context["selected_product_ids"], selected_ids)
         self.assertEqual(page.context["daily_count"], 0)
+        self.assertNotContains(page, "Products (up to 7)")
+        self.assertContains(page, 'id="productPickerSearch"')
 
         csv_lines = streamed_csv(
             self.client.get(reverse("product_report_csv"), params)
         ).splitlines()
         self.assertEqual(len(csv_lines), 2)
+
+    def test_product_options_search_excludes_already_selected_products(self):
+        other = MasterProduct.objects.create(name="Gilbey's Gold", category="750ml")
+
+        response = self.client.get(
+            reverse("product_report_options"),
+            {"q": "gil", "exclude": [self.gilbeys.pk]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        self.assertEqual([item["id"] for item in results], [other.pk])
+
+    def test_product_options_require_a_usable_query_and_owner_role(self):
+        short = self.client.get(reverse("product_report_options"), {"q": "g"})
+        self.assertEqual(short.json(), {"results": []})
+
+        self.client.force_login(self.empire_manager)
+        forbidden = self.client.get(reverse("product_report_options"), {"q": "gil"})
+        self.assertEqual(forbidden.status_code, 403)
 
 
 class ManualStockAdditionTests(BaseDataTestCase):
