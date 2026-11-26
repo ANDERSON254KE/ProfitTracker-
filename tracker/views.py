@@ -1388,7 +1388,7 @@ class ShopPricingView(OwnerRequiredMixin, View):
             try:
                 with transaction.atomic():
                     product = MasterProduct.objects.create(
-                        name=new_name, category=new_category
+                        name=new_name, category=new_category, is_manual=True
                     )
                     ShopProduct.objects.bulk_create([
                         ShopProduct(

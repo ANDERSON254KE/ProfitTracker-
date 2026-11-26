@@ -142,6 +142,11 @@ class MasterProduct(models.Model):
 
     name = models.CharField("Product", max_length=255)
     category = models.CharField("Category", max_length=100, blank=True, default="")
+    is_manual = models.BooleanField(
+        "Added Manually",
+        default=False,
+        help_text="Added from the Common product sheet; price-list syncs keep it active.",
+    )
 
     class Meta:
         ordering = ["name", "category"]

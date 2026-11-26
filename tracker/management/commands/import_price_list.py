@@ -1,6 +1,7 @@
 """Load the master catalogue from ``price list.xlsx`` and price it for every shop.
 
-The spreadsheet is the single source of truth for *which* products exist. Each
+The spreadsheet is the single source of truth for *which* products exist,
+except for products added from the Common product sheet, which stay active. Each
 shop's cost/selling price comes from the existing :class:`ShopProduct` row when
 one is already there, so re-running this command after a price change at the
 branch never overwrites that shop's own pricing.
@@ -137,7 +138,7 @@ class Command(BaseCommand):
             for shop in shops:
                 stale = ShopProduct.objects.filter(shop=shop, is_active=True).exclude(
                     product_id__in=seen_ids
-                )
+                ).exclude(product__is_manual=True)
                 deactivated += stale.update(is_active=False)
 
         self.stdout.write(

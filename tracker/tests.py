@@ -1351,6 +1351,15 @@ class ShopPricingTests(BaseDataTestCase):
         self.assertIn("Fanta", {row["product"].name for row in sheet.context["rows"]})
         self.assertContains(sheet, "needs pricing")
 
+    def test_products_added_from_the_common_sheet_are_marked_manual(self):
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("shop_pricing"),
+            {"new_product_name": "Cigarettes Pack", "new_product_category": "cigarettes"},
+        )
+        product = MasterProduct.objects.get(name="Cigarettes Pack", category="cigarettes")
+        self.assertTrue(product.is_manual)
+
     def test_a_new_category_can_be_created_with_a_product(self):
         self.client.force_login(self.owner)
         response = self.client.post(
@@ -1747,6 +1756,32 @@ class PriceListCatalogueSyncTests(BaseDataTestCase):
                 shop=shop, product=jameson, cost_price=Decimal("0.00"),
                 selling_price=Decimal("0.00"),
             ).exists())
+
+    def test_price_list_import_keeps_manually_added_products_active(self):
+        self.client.force_login(self.owner)
+        self.client.post(
+            reverse("shop_pricing"),
+            {"new_product_name": "Cigarettes Pack", "new_product_category": "cigarettes"},
+        )
+        manual = MasterProduct.objects.get(name="Cigarettes Pack", category="cigarettes")
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "all"
+        sheet.append(["Product", "Cost Price", "Selling Price", "Category"])
+        sheet.append(["Gilbeys", "450", "550", "250ml"])
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "price list.xlsx")
+            workbook.save(path)
+            workbook.close()
+            call_command("import_price_list", file=path, verbosity=0)
+
+        for shop in (self.fig_tree, self.empire):
+            card = ShopProduct.objects.get(shop=shop, product=manual)
+            self.assertTrue(card.is_active)
+        self.assertFalse(
+            ShopProduct.objects.get(shop=self.fig_tree, product=self.blue_ice).is_active
+        )
 
 
 class DailySalesSheetTests(BaseDataTestCase):
