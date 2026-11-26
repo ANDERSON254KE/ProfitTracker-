@@ -1,0 +1,80 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}My Account · Profit Tracker{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="{% url 'manager_dashboard' %}" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">
+        ← Back to my shop
+    </a>
+    <h1 class="mt-2 text-2xl font-bold tracking-tight text-slate-900">My Account</h1>
+    <p class="mt-1 text-sm text-slate-500">
+        Update your details and password. Your shop stays the same unless the owner changes it.
+    </p>
+</div>
+
+<section class="rounded-xl bg-white p-5 shadow sm:max-w-3xl">
+    <div class="mb-5 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
+        <p><span class="font-medium text-slate-900">Username:</span> {{ user.username }}</p>
+        <p><span class="font-medium text-slate-900">Shop:</span> {{ user.assigned_shop.name|default:"Not assigned" }}</p>
+        <p><span class="font-medium text-slate-900">Role:</span> {{ user.get_role_display }}</p>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+        <div class="mb-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {{ form.non_field_errors|striptags }}
+        </div>
+        {% endif %}
+
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {% for field in form %}
+            <div class="{% if field.name == 'password' or field.name == 'confirm_password' %}relative{% endif %}">
+                <label for="{{ field.id_for_label }}" class="block text-sm font-medium text-slate-700">
+                    {{ field.label }}
+                </label>
+                {{ field }}
+                {% if field.name == 'password' or field.name == 'confirm_password' %}
+                <button type="button" class="password-toggle absolute inset-y-0 right-0 flex items-center px-3 pt-5 text-slate-500 hover:text-slate-700"
+                        data-password-input="{{ field.id_for_label }}" aria-label="Show password" aria-pressed="false">
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                        <path d="M2.25 12S5.75 5.75 12 5.75 21.75 12 21.75 12 18.25 18.25 12 18.25 2.25 12 2.25 12Z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                </button>
+                {% endif %}
+                <p class="mt-1 text-xs text-slate-500">{{ field.help_text }}</p>
+                {% if field.errors %}
+                <p class="mt-1 text-xs text-rose-600">{{ field.errors|striptags }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="mt-6">
+            <button type="submit"
+                    class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                Save account
+            </button>
+        </div>
+    </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    document.querySelectorAll('.password-toggle').forEach(function (button) {
+        button.addEventListener('click', function () {
+            const input = document.getElementById(button.dataset.passwordInput);
+            if (!input) return;
+            const showing = input.type === 'text';
+            input.type = showing ? 'password' : 'text';
+            button.setAttribute('aria-pressed', showing ? 'false' : 'true');
+            button.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+        });
+    });
+})();
+</script>
+{% endblock %}

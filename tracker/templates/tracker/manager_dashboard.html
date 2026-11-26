@@ -10,10 +10,16 @@
         <p class="text-sm text-slate-500">{{ today|date:"l, d F Y" }}</p>
     </div>
     {% if has_shop %}
+    <div class="flex flex-wrap gap-2">
+        <a href="{% url 'manager_account' %}"
+           class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+            My Account
+        </a>
         <a href="{{ sale_form_url }}"
            class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
             + Enter Today's Sales
         </a>
+    </div>
     {% endif %}
 </div>
 
@@ -22,6 +28,20 @@
         Your account has no shop assigned yet. Ask the owner to assign you to a shop so you can start recording sales.
     </div>
 {% else %}
+
+    <section class="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white p-5 shadow">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">My account profile</h2>
+            <p class="mt-0.5 text-sm text-slate-500">
+                {{ user.get_full_name|default:user.username }} · {{ user.username }}
+                {% if user.id_number %} · ID {{ user.id_number }}{% endif %}
+            </p>
+        </div>
+        <a href="{% url 'manager_account' %}"
+           class="text-sm font-semibold text-indigo-600 hover:text-indigo-500">
+            View and edit →
+        </a>
+    </section>
 
     {# ---- Today's sheet: the main thing a manager opens this page to fill ---- #}
     <section class="mt-5">

@@ -125,6 +125,10 @@
                            class="text-sm font-medium {% if request.resolver_match.url_name == 'daily_sale_create' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
                             Record Sale
                         </a>
+                        <a href="{% url 'manager_account' %}"
+                           class="text-sm font-medium {% if request.resolver_match.url_name == 'manager_account' %}text-indigo-400{% else %}hover:text-indigo-300{% endif %}">
+                            Account
+                        </a>
                     {% endif %}
                 {% endif %}
             </div>
@@ -168,6 +172,7 @@
         {% else %}
         <a href="{% url 'manager_dashboard' %}" class="py-1 text-sm font-medium hover:text-indigo-300">My Shop</a>
         <a href="{% url 'daily_sale_create' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Record Sale</a>
+        <a href="{% url 'manager_account' %}" class="py-1 text-sm font-medium hover:text-indigo-300">Account</a>
         {% endif %}
     </div>
 </nav>

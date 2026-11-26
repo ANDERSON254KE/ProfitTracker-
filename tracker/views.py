@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 import csv
 
 from django.contrib import messages
-from django.contrib.auth import login
+from django.contrib.auth import login, update_session_auth_hash
 from django.contrib.auth.views import LoginView as AuthLoginView
 from django.contrib.auth.views import LogoutView as AuthLogoutView
 from django.core.paginator import Paginator
@@ -39,9 +39,11 @@ except Exception:
 from .forms import (
     DailySaleForm,
     DailySalesSheetForm,
+    ManagerAccountForm,
     ShopDailyCashForm,
     ShopPricingForm,
     StockAdditionForm,
+    TrackerAuthenticationForm,
     WorkerProfileForm,
 )
 from .mixins import (
@@ -51,7 +53,6 @@ from .mixins import (
     OwnerRequiredMixin,
 )
 from .models import (
-    MAX_WORKERS_PER_SHOP,
     CustomUser,
     DailySale,
     MasterProduct,
@@ -130,7 +131,6 @@ def _worker_directory():
                 "shop": shop,
                 "workers": shop_workers,
                 "active_count": active_count,
-                "full": active_count >= MAX_WORKERS_PER_SHOP,
             }
         )
     return rows, unassigned
@@ -247,13 +247,14 @@ def _daily_sheet_openings(shop, day):
     return openings
 
 
-def build_daily_sheet_context(shop):
-    """Build the context for the daily stock sheet of one shop and today.
+def build_daily_sheet_context(shop, day=None):
+    """Build the context for one shop's daily stock sheet on ``day``.
 
     Shared by the sheet page and the manager's dashboard, where the same form
     is shown first so the manager can fill the day in without navigating away.
     """
     today = timezone.localdate()
+    day = day or today
 
     price_card = list(
         ShopProduct.objects.filter(shop=shop, is_active=True)
@@ -273,10 +274,10 @@ def build_daily_sheet_context(shop):
     today_entries = {
         sale.product_id: sale
         for sale in DailySale.objects.filter(
-            shop=shop, sale_date=today, total_stock__isnull=False
+            shop=shop, sale_date=day, total_stock__isnull=False
         )
     }
-    openings = _daily_sheet_openings(shop, today)
+    openings = _daily_sheet_openings(shop, day)
 
     rows = []
     for card in price_card:
@@ -307,22 +308,22 @@ def build_daily_sheet_context(shop):
             }
         )
 
-    day = DailySale.objects.filter(shop=shop, sale_date=today).aggregate(
+    totals = DailySale.objects.filter(shop=shop, sale_date=day).aggregate(
         revenue=Sum("total_revenue"),
         cost=Sum("total_cost"),
         profit=Sum("profit"),
         units=Sum("units_sold"),
     )
 
-    cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=today).first()
+    cash_record = ShopDailyCash.objects.filter(shop=shop, cash_date=day).first()
     mpesa = cash_record.mpesa if cash_record else Decimal("0.00")
     bill_out = cash_record.bill_out if cash_record else Decimal("0.00")
     bill_paid = cash_record.bill_paid if cash_record else Decimal("0.00")
-    total_sales = _money(day["revenue"])
+    total_sales = _money(totals["revenue"])
 
     expense_rows = [
         {"description": row["description"], "amount": _input_value(row["amount"])}
-        for row in ShopExpense.objects.filter(shop=shop, expense_date=today)
+        for row in ShopExpense.objects.filter(shop=shop, expense_date=day)
         .order_by("pk")
         .values("description", "amount")
     ]
@@ -339,6 +340,10 @@ def build_daily_sheet_context(shop):
     return {
         "shop": shop,
         "today": today,
+        "day": day,
+        "previous_day": day - timedelta(days=1),
+        "next_day": day + timedelta(days=1),
+        "is_today": day == today,
         "openings": openings,
         "rows": rows,
         "sections": [
@@ -346,11 +351,11 @@ def build_daily_sheet_context(shop):
             for name, count in section_counts.items()
         ],
         "has_products": bool(rows),
-        "day_revenue": _money(day["revenue"]),
-        "day_cost": _money(day["cost"]),
-        "day_profit": _money(day["profit"]),
-        "day_units": _money(day["units"]),
-        "recorded_count": DailySale.objects.filter(shop=shop, sale_date=today).count(),
+        "day_revenue": _money(totals["revenue"]),
+        "day_cost": _money(totals["cost"]),
+        "day_profit": _money(totals["profit"]),
+        "day_units": _money(totals["units"]),
+        "recorded_count": DailySale.objects.filter(shop=shop, sale_date=day).count(),
         "cash_record": cash_record,
         "cash_mpesa": str(mpesa) if cash_record else "",
         "cash_bill_out": str(bill_out) if cash_record else "",
@@ -370,6 +375,7 @@ class LoginView(AuthLoginView):
     """Sign a user in and send them to the dashboard for their role."""
 
     template_name = "tracker/login.html"
+    authentication_form = TrackerAuthenticationForm
     redirect_authenticated_user = True
 
     def get_success_url(self) -> str:
@@ -429,7 +435,6 @@ class OwnerDashboardView(OwnerRequiredMixin, TemplateView):
         worker_rows, unassigned_workers = _worker_directory()
         context["worker_rows"] = worker_rows
         context["unassigned_workers"] = unassigned_workers
-        context["max_workers"] = MAX_WORKERS_PER_SHOP
 
         # Overall totals across every shop.
         overall = sales.aggregate(
@@ -569,7 +574,6 @@ class WorkerProfileView(OwnerRequiredMixin, TemplateView):
         worker_rows, unassigned_workers = _worker_directory()
         context["worker_rows"] = worker_rows
         context["unassigned_workers"] = unassigned_workers
-        context["max_workers"] = MAX_WORKERS_PER_SHOP
         context.setdefault("form", WorkerProfileForm())
         return context
 
@@ -643,6 +647,31 @@ class WorkerProfileDeleteView(OwnerRequiredMixin, View):
             _sync_shop_manager(old_shop)
             messages.success(request, f"Deleted {label}'s profile.")
         return redirect("worker_profiles")
+
+
+class ManagerAccountView(ManagerRequiredMixin, TemplateView):
+    """Let a signed-in manager update their own account details."""
+
+    template_name = "tracker/manager_account.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.setdefault("form", ManagerAccountForm(instance=self.request.user))
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = ManagerAccountForm(request.POST, instance=request.user)
+        if form.is_valid():
+            changing_password = bool(form.cleaned_data.get("password"))
+            user = form.save()
+            if changing_password:
+                update_session_auth_hash(request, user)
+            messages.success(
+                request,
+                f"Saved {user.get_full_name() or user.username}'s account.",
+            )
+            return redirect("manager_account")
+        return self.render_to_response(self.get_context_data(form=form))
 
 
 class ManagerDashboardView(ManagerRequiredMixin, TemplateView):
@@ -728,28 +757,48 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
     a profit, so the owner must price them first. ``sections`` groups the rows
     by category (250ml, 500ml, soda ...) for the sheet's filter chips.
 
-    ``POST`` upserts one stock row per filled-in product for today: submitting
-    again replaces today's figures instead of double-counting them.
+    ``POST`` upserts one stock row per filled-in product for the selected day:
+    submitting again replaces that day's figures instead of double-counting.
     """
 
     template_name = "tracker/daily_sales_sheet.html"
 
-    def _build_context(self):
+    def _selected_day(self):
+        """Return the requested day, capped at today for invalid/future dates."""
+        raw = (
+            self.request.POST.get("day")
+            if self.request.method == "POST"
+            else self.request.GET.get("date")
+        )
+        today = timezone.localdate()
+        day = _parse_date(raw)
+        if day is None or day > today:
+            return today
+        return day
+
+    def _redirect_to_day(self, day):
+        """Return to the sheet, keeping a past date in the query string."""
+        url = reverse("daily_sales_sheet")
+        if day != timezone.localdate():
+            url += f"?date={day.isoformat()}"
+        return redirect(url)
+
+    def _build_context(self, day):
         """Gather the sheet rows, openings and the day's recorded totals."""
-        return build_daily_sheet_context(self.shop)
+        return build_daily_sheet_context(self.shop, day=day)
 
     def get(self, request, *args, **kwargs):
         """Render the sheet, pre-filled with what has already been recorded."""
-        return self.render_to_response(self._build_context())
+        return self.render_to_response(self._build_context(self._selected_day()))
 
     def post(self, request, *args, **kwargs):
         """Save every filled-in stock row, then show the day's running totals."""
-        today = timezone.localdate()
+        day = self._selected_day()
         form = DailySalesSheetForm(
             request.POST,
             shop=self.shop,
-            openings=_daily_sheet_openings(self.shop, today),
-            day=today,
+            openings=_daily_sheet_openings(self.shop, day),
+            day=day,
         )
         cash_form = ShopDailyCashForm(request.POST)
 
@@ -781,7 +830,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
 
         if not form.is_valid() or not cash_form.is_valid() or expense_errors:
             # Re-render with what the user typed so nothing has to be retyped.
-            context = build_daily_sheet_context(self.shop)
+            context = build_daily_sheet_context(self.shop, day=day)
             for row in context["rows"]:
                 key = row["product"].pk
                 for name, prefix in (
@@ -833,7 +882,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
         with transaction.atomic():
             ShopDailyCash.objects.update_or_create(
                 shop=self.shop,
-                cash_date=today,
+                cash_date=day,
                 defaults={
                     "mpesa": cash_form.cleaned_data["mpesa"] or Decimal("0.00"),
                     "bill_out": cash_form.cleaned_data["bill_out"] or Decimal("0.00"),
@@ -843,12 +892,12 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             )
 
             if expense_items:
-                ShopExpense.objects.filter(shop=self.shop, expense_date=today).delete()
+                ShopExpense.objects.filter(shop=self.shop, expense_date=day).delete()
                 ShopExpense.objects.bulk_create(
                     [
                         ShopExpense(
                             shop=self.shop,
-                            expense_date=today,
+                            expense_date=day,
                             description=description,
                             amount=amount,
                             recorded_by=request.user,
@@ -859,7 +908,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             elif raw_expenses is not None:
                 existing_expenses = list(
                     ShopExpense.objects.filter(
-                        shop=self.shop, expense_date=today
+                        shop=self.shop, expense_date=day
                     ).order_by("pk")
                 )
                 if existing_expenses:
@@ -873,7 +922,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
                 elif expense_amount > 0:
                     ShopExpense.objects.create(
                         shop=self.shop,
-                        expense_date=today,
+                        expense_date=day,
                         description="Daily expenses",
                         amount=expense_amount,
                         recorded_by=request.user,
@@ -882,7 +931,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             sales = form.save(request.user)
 
         if sales or raw_expenses is not None or expense_items:
-            _save_shop_daily_profit(self.shop, today, request.user, create=False)
+            _save_shop_daily_profit(self.shop, day, request.user, create=False)
         for warning in form.warnings:
             messages.warning(request, warning)
 
@@ -893,7 +942,7 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
                 "additional stock and closing stock for the products that changed, "
                 "or leave a row blank.",
             )
-            return redirect("daily_sales_sheet")
+            return self._redirect_to_day(day)
 
         units = sum((s.units_sold for s in sales), Decimal("0.00"))
         amount = sum((s.total_revenue for s in sales), Decimal("0.00"))
@@ -902,10 +951,11 @@ class DailySalesSheetView(ManagerRequiredMixin, ManagerShopAccessMixin, Template
             f"Saved {len(sales)} product(s): {units.normalize():f} unit(s) sold, "
             f"amount {CURRENCY} {amount:,.2f}.",
         )
-        return redirect("daily_sales_sheet")
+        return self._redirect_to_day(day)
 
 
 class ShopProfitSheetView(OwnerRequiredMixin, ManagerShopAccessMixin, TemplateView):
+
     """Record one shop's daily product quantities and expenses."""
 
     template_name = "tracker/shop_profit_sheet.html"

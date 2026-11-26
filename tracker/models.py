@@ -27,8 +27,6 @@ from django.utils import timezone
 MONEY_VALIDATORS = [MinValueValidator(Decimal("0.00"))]
 #: Additional stock may be negative: it records products given out that day.
 STOCK_MOVE_VALIDATORS = [MinValueValidator(Decimal("-999999999999.99"))]
-#: Maximum number of active managers allowed for one shop.
-MAX_WORKERS_PER_SHOP = 2
 
 
 class LocalDateField(models.DateField):

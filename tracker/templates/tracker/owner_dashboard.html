@@ -36,9 +36,8 @@
         <div class="rounded-lg bg-slate-50 p-3">
             <div class="flex items-center justify-between gap-2">
                 <p class="text-sm font-semibold text-slate-900">{{ row.shop.name }}</p>
-                <span class="rounded-full bg-white px-2 py-0.5 text-xs font-semibold
-                           {% if row.full %}text-amber-700{% else %}text-slate-500{% endif %}">
-                    {{ row.active_count }}/{{ max_workers }}
+                <span class="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">
+                    {{ row.active_count }} active
                 </span>
             </div>
             <p class="mt-1 text-xs text-slate-600">

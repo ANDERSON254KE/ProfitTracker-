@@ -24,6 +24,7 @@
 {% else %}
 <form method="post" action="{% url 'daily_sales_sheet' %}" id="sales-sheet">
     {% csrf_token %}
+    <input type="hidden" name="day" value="{{ day|date:'Y-m-d' }}">
     <div class="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
 
         {# Toolbar: search + one chip per size section #}
@@ -218,7 +219,7 @@
             </p>
             <button type="submit"
                     class="h-9 w-full rounded-md bg-zinc-900 px-4 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-900/20 sm:w-auto">
-                Save today's sheet
+                Save this day's sheet
             </button>
         </div>
     </div>

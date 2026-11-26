@@ -11,9 +11,36 @@
                class="text-xs font-medium text-zinc-500 hover:text-zinc-900">← Back to dashboard</a>
             <h1 class="mt-0.5 text-2xl font-bold tracking-tight text-zinc-900">Daily sales sheet</h1>
             <p class="mt-0.5 text-sm text-zinc-500">
-                {{ shop.name }} · {{ today|date:"l, d F Y" }}
+                {{ shop.name }} · {{ day|date:"l, d F Y" }}
+                {% if not is_today %}<span class="ml-1 font-medium text-amber-600">· viewing a past day</span>{% endif %}
             </p>
         </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2">
+        <a href="{% url 'daily_sales_sheet' %}?date={{ previous_day|date:'Y-m-d' }}"
+           class="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+            ← Previous day
+        </a>
+        <form method="get" class="flex items-center gap-2">
+            <label class="sr-only" for="sheet-date">Sheet date</label>
+            <input id="sheet-date" type="date" name="date" value="{{ day|date:'Y-m-d' }}" max="{{ today|date:'Y-m-d' }}"
+                   class="h-8 rounded-md border border-zinc-200 px-2 text-xs text-zinc-900">
+            <button type="submit"
+                    class="h-8 rounded-md border border-zinc-300 px-2.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+                Go
+            </button>
+        </form>
+        {% if not is_today %}
+        <a href="{% url 'daily_sales_sheet' %}?date={{ next_day|date:'Y-m-d' }}"
+           class="rounded-md border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+            Next day →
+        </a>
+        <a href="{% url 'daily_sales_sheet' %}"
+           class="rounded-md border border-zinc-900 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-800">
+            Today
+        </a>
+        {% endif %}
     </div>
 </div>
 

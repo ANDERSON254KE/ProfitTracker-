@@ -47,6 +47,11 @@ urlpatterns = [
         name="manager_dashboard",
     ),
     path(
+        "manager/account/",
+        views.ManagerAccountView.as_view(),
+        name="manager_account",
+    ),
+    path(
         "manager/sale/add/",
         views.DailySaleCreateView.as_view(),
         name="daily_sale_create",

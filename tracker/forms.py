@@ -12,12 +12,13 @@ every money figure -- are derived server side.
 from decimal import Decimal, InvalidOperation
 
 from django import forms
+from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .models import (
-    MAX_WORKERS_PER_SHOP,
     CustomUser,
     DailySale,
     MasterProduct,
@@ -613,6 +614,15 @@ class WorkerProfileForm(forms.ModelForm):
         for name in ("password", "confirm_password"):
             self.fields[name].widget.attrs["class"] += " pr-10"
 
+    def clean_username(self):
+        username = self.cleaned_data["username"].strip().lower()
+        matches = CustomUser.objects.filter(username__iexact=username)
+        if self.instance.pk:
+            matches = matches.exclude(pk=self.instance.pk)
+        if matches.exists():
+            raise ValidationError("A user with that username already exists.")
+        return username
+
     def clean_password(self):
         password = self.cleaned_data.get("password")
         if password:
@@ -627,26 +637,114 @@ class WorkerProfileForm(forms.ModelForm):
             self.add_error("confirm_password", "Passwords do not match.")
         elif not password and confirmation:
             self.add_error("confirm_password", "Enter a password to confirm.")
-        shop = cleaned.get("assigned_shop")
-        if cleaned.get("is_active") and shop:
-            active = CustomUser.objects.filter(
-                role=CustomUser.Role.MANAGER,
-                assigned_shop=shop,
-                is_active=True,
-            )
-            if self.instance.pk:
-                active = active.exclude(pk=self.instance.pk)
-            if active.count() >= MAX_WORKERS_PER_SHOP:
-                self.add_error(
-                    "assigned_shop",
-                    f"This shop already has {MAX_WORKERS_PER_SHOP} active workers. "
-                    "Deactivate one first.",
-                )
         return cleaned
 
     def save(self, commit=True):
         user = super().save(commit=False)
         user.role = CustomUser.Role.MANAGER
+        if not user.pk:
+            user.is_active = True
+        password = self.cleaned_data.get("password")
+        if password:
+            user.set_password(password)
+        else:
+            user.password = self._original_password
+        if commit:
+            user.save()
+        return user
+
+
+class TrackerAuthenticationForm(AuthenticationForm):
+    """Username sign-in that tolerates case differences and explains lockouts."""
+
+    def clean(self):
+        username = self.cleaned_data.get("username")
+        password = self.cleaned_data.get("password")
+        if username and password:
+            candidate = CustomUser.objects.filter(
+                username__iexact=username.strip()
+            ).first()
+            if candidate:
+                self.cleaned_data["username"] = candidate.username
+                if candidate.check_password(password) and not candidate.is_active:
+                    raise ValidationError(
+                        "This account is inactive. Ask the owner to enable it."
+                    )
+        return super().clean()
+
+
+class ManagerAccountForm(forms.ModelForm):
+    """Let a manager update their own details and, optionally, password."""
+
+    password = forms.CharField(
+        label="New Password",
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        help_text="Leave blank to keep the current password.",
+    )
+    confirm_password = forms.CharField(
+        label="Confirm New Password",
+        required=False,
+        widget=forms.PasswordInput(render_value=False),
+        help_text="Repeat the new password when changing it.",
+    )
+
+    class Meta:
+        model = CustomUser
+        fields = [
+            "first_name",
+            "last_name",
+            "username",
+            "email",
+            "id_number",
+            "residency",
+            "guardian_name",
+            "guardian_phone",
+            "guardian_id_number",
+            "password",
+            "confirm_password",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._original_password = self.instance.password
+        self.fields["first_name"].required = True
+        for name, field in self.fields.items():
+            field.widget.attrs.setdefault(
+                "class",
+                "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 "
+                "py-2.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500",
+            )
+        for name in ("password", "confirm_password"):
+            self.fields[name].widget.attrs["class"] += " pr-10"
+
+    def clean_username(self):
+        username = self.cleaned_data["username"].strip().lower()
+        matches = CustomUser.objects.filter(username__iexact=username).exclude(
+            pk=self.instance.pk
+        )
+        if matches.exists():
+            raise ValidationError("A user with that username already exists.")
+        return username
+
+    def clean_password(self):
+        password = self.cleaned_data.get("password")
+        if password:
+            validate_password(password, self.instance)
+        return password
+
+    def clean(self):
+        cleaned = super().clean()
+        password = cleaned.get("password")
+        confirmation = cleaned.get("confirm_password")
+        if password and password != confirmation:
+            self.add_error("confirm_password", "Passwords do not match.")
+        elif not password and confirmation:
+            self.add_error("confirm_password", "Enter a new password to confirm.")
+        return cleaned
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
         password = self.cleaned_data.get("password")
         if password:
             user.set_password(password)

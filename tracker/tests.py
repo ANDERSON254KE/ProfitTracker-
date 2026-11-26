@@ -367,7 +367,7 @@ class WorkerProfileTests(BaseDataTestCase):
         self.assertTrue(CustomUser.objects.filter(pk=self.fig_manager.pk).exists())
         self.assertContains(response, "Deactivate them instead.")
 
-    def test_shop_cannot_have_more_than_two_active_workers(self):
+    def test_a_shop_can_have_more_than_two_active_workers(self):
         self.client.force_login(self.owner)
         self.assertRedirects(
             self.client.post(reverse("worker_profiles"), self.payload()),
@@ -379,17 +379,43 @@ class WorkerProfileTests(BaseDataTestCase):
                 first_name="John", username="john", email="john@example.com"
             ),
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "already has 2 active workers")
-        self.assertFalse(CustomUser.objects.filter(username="john").exists())
+        self.assertRedirects(response, reverse("worker_profiles"))
+        self.assertTrue(CustomUser.objects.filter(username="john").exists())
         self.assertEqual(
             CustomUser.objects.filter(
                 role=CustomUser.Role.MANAGER,
                 assigned_shop=self.fig_tree,
                 is_active=True,
             ).count(),
-            2,
+            3,
         )
+
+    def test_new_worker_is_active_and_can_sign_in_with_mixed_case_username(self):
+        self.client.force_login(self.owner)
+        payload = self.payload(username="MARY")
+        self.assertRedirects(
+            self.client.post(reverse("worker_profiles"), payload),
+            reverse("worker_profiles"),
+        )
+        worker = CustomUser.objects.get(username="mary")
+        self.assertTrue(worker.is_active)
+
+        self.client.logout()
+        response = self.client.post(
+            reverse("login"),
+            {"username": "Mary", "password": self.PASSWORD},
+        )
+        self.assertRedirects(response, "/", fetch_redirect_response=False)
+        self.assertRedirects(self.client.get("/"), reverse("manager_dashboard"))
+
+    def test_duplicate_username_is_rejected_regardless_of_case(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            reverse("worker_profiles"), self.payload(username="FIGTREE")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "A user with that username already exists.")
+        self.assertFalse(CustomUser.objects.filter(username="FIGTREE").exists())
 
     def test_owner_can_edit_worker_shop_without_changing_password(self):
         self.client.force_login(self.owner)
@@ -446,7 +472,82 @@ class WorkerProfileTests(BaseDataTestCase):
 
         self.assertContains(response, "Profiles")
         self.assertContains(response, "Clerk")
-        self.assertContains(response, "2/2")
+        self.assertContains(response, "2 active")
+
+
+class ManagerAccountTests(BaseDataTestCase):
+    PASSWORD = "AccountPass123!x"
+
+    def payload(self, **overrides):
+        data = {
+            "first_name": "Fig",
+            "last_name": "Manager",
+            "username": "figtree",
+            "email": "fig@example.com",
+            "id_number": "12345678",
+            "residency": "Kilifi",
+            "guardian_name": "Jane",
+            "guardian_phone": "0712345678",
+            "guardian_id_number": "87654321",
+            "password": "",
+            "confirm_password": "",
+        }
+        data.update(overrides)
+        return data
+
+    def test_manager_has_an_account_profile_in_their_shop_area(self):
+        self.client.force_login(self.fig_manager)
+        dashboard = self.client.get(reverse("manager_dashboard"))
+        self.assertContains(dashboard, reverse("manager_account"))
+        page = self.client.get(reverse("manager_account"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "My Account")
+        self.assertContains(page, "Fig Tree")
+
+    def test_only_the_manager_can_open_their_account(self):
+        response = self.client.get(reverse("manager_account"))
+        self.assertRedirects(
+            response, f"{reverse('login')}?next={reverse('manager_account')}"
+        )
+        self.client.force_login(self.owner)
+        self.assertEqual(
+            self.client.get(reverse("manager_account")).status_code, 403
+        )
+
+    def test_manager_can_update_details_and_password(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse("manager_account"),
+            self.payload(
+                first_name="Updated",
+                username="FIGTREE",
+                password=self.PASSWORD,
+                confirm_password=self.PASSWORD,
+            ),
+        )
+        self.assertRedirects(response, reverse("manager_account"))
+
+        self.fig_manager.refresh_from_db()
+        self.assertEqual(self.fig_manager.first_name, "Updated")
+        self.assertEqual(self.fig_manager.username, "figtree")
+        self.assertEqual(self.fig_manager.assigned_shop, self.fig_tree)
+        self.assertTrue(self.fig_manager.check_password(self.PASSWORD))
+
+        self.client.logout()
+        response = self.client.post(
+            reverse("login"),
+            {"username": "FigTree", "password": self.PASSWORD},
+        )
+        self.assertRedirects(response, "/", fetch_redirect_response=False)
+        self.assertRedirects(self.client.get("/"), reverse("manager_dashboard"))
+
+    def test_manager_cannot_take_another_users_username(self):
+        self.client.force_login(self.fig_manager)
+        response = self.client.post(
+            reverse("manager_account"), self.payload(username="empire")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "A user with that username already exists.")
 
 
 class ManagerDashboardIsolationTests(BaseDataTestCase):
@@ -2039,6 +2140,67 @@ class DailySalesSheetTests(BaseDataTestCase):
         )
         self.assertEqual(today.opening_stock, Decimal("9.00"))
         self.assertEqual(today.units_sold, Decimal("7.00"))
+
+    def test_manager_can_open_yesterdays_sheet(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        DailySale.objects.create(
+            shop=self.fig_tree,
+            product=self.gilbeys,
+            sale_date=yesterday,
+            units_sold=Decimal("4.00"),
+            opening_stock=Decimal("0.00"),
+            additional_stock=Decimal("10.00"),
+            total_stock=Decimal("10.00"),
+            closing_stock=Decimal("6.00"),
+            recorded_by=self.fig_manager,
+        )
+        self.client.force_login(self.fig_manager)
+        response = self.client.get(
+            reverse(self.SHEET), {"date": yesterday.isoformat()}
+        )
+
+        self.assertEqual(response.context["day"], yesterday)
+        self.assertEqual(response.context["today"], timezone.localdate())
+        self.assertTrue(response.context["is_today"] is False)
+        rows = {row["product"]: row for row in response.context["rows"]}
+        self.assertEqual(rows[self.gilbeys]["entry"].units_sold, Decimal("4.00"))
+        self.assertContains(response, "viewing a past day")
+        self.assertContains(response, "Previous day")
+        self.assertContains(response, "Today")
+
+    def test_saving_a_past_day_does_not_touch_today(self):
+        yesterday = timezone.localdate() - timedelta(days=1)
+        self.client.force_login(self.fig_manager)
+        payload = self.stock(self.gilbeys, additional="10", closing="6")
+        payload.update({
+            "day": yesterday.isoformat(),
+            "mpesa": "300",
+            "expenses": "75.00",
+        })
+        response = self.client.post(reverse(self.SHEET), payload)
+        self.assertRedirects(
+            response, f"{reverse(self.SHEET)}?date={yesterday.isoformat()}"
+        )
+
+        sale = DailySale.objects.get(sale_date=yesterday)
+        self.assertEqual(sale.units_sold, Decimal("4.00"))
+        self.assertFalse(
+            DailySale.objects.filter(sale_date=timezone.localdate()).exists()
+        )
+        cash = ShopDailyCash.objects.get(cash_date=yesterday)
+        self.assertEqual(cash.mpesa, Decimal("300.00"))
+        expense = ShopExpense.objects.get(expense_date=yesterday)
+        self.assertEqual(expense.amount, Decimal("75.00"))
+        self.assertFalse(
+            ShopDailyProfit.objects.filter(
+                shop=self.fig_tree, profit_date=yesterday
+            ).exists()
+        )
+        self.assertFalse(
+            ShopDailyProfit.objects.filter(
+                shop=self.fig_tree, profit_date=timezone.localdate()
+            ).exists()
+        )
 
     def test_opening_stock_without_a_closing_count_is_rejected(self):
         yesterday = timezone.localdate() - timedelta(days=1)

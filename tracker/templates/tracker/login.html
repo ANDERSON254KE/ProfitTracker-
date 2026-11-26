@@ -27,7 +27,12 @@
                     <circle cx="12" cy="12" r="10" />
                     <path stroke-linecap="round" d="M12 8v4m0 4h.01" />
                 </svg>
-                <p class="font-medium">Your username and password didn't match. Please try again.</p>
+                <div class="space-y-1">
+                    <p class="font-medium">Your username and password didn't match. Please try again.</p>
+                    {% if form.non_field_errors %}
+                    <p class="text-sm">{{ form.non_field_errors|striptags }}</p>
+                    {% endif %}
+                </div>
             </div>
             {% endif %}
 
