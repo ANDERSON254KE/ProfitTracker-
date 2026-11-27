@@ -569,12 +569,24 @@ class WorkerProfileView(OwnerRequiredMixin, TemplateView):
 
     template_name = "tracker/worker_profiles.html"
 
+    def _selected_shop(self):
+        raw = self.request.GET.get("shop")
+        if not raw:
+            return None
+        try:
+            return Shop.objects.get(pk=raw)
+        except (Shop.DoesNotExist, TypeError, ValueError):
+            return None
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         worker_rows, unassigned_workers = _worker_directory()
+        selected_shop = self._selected_shop()
+        initial = {"assigned_shop": selected_shop.pk} if selected_shop else None
         context["worker_rows"] = worker_rows
         context["unassigned_workers"] = unassigned_workers
-        context.setdefault("form", WorkerProfileForm())
+        context["selected_shop"] = selected_shop
+        context.setdefault("form", WorkerProfileForm(initial=initial))
         return context
 
     def post(self, request, *args, **kwargs):

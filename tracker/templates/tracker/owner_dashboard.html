@@ -51,6 +51,10 @@
                     {% endfor %}
                 {% endif %}
             </p>
+            <a href="{% url 'worker_profiles' %}?shop={{ row.shop.pk }}#add-worker"
+               class="mt-2 inline-flex text-xs font-semibold text-indigo-600 hover:text-indigo-500">
+                + Add manager
+            </a>
         </div>
         {% empty %}
         <p class="text-sm text-slate-500">No shops yet.</p>

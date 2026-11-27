@@ -68,6 +68,10 @@
             </p>
             {% endfor %}
         </div>
+        <a href="{% url 'worker_profiles' %}?shop={{ row.shop.pk }}#add-worker"
+           class="mt-4 inline-flex text-xs font-semibold text-indigo-600 hover:text-indigo-500">
+            + Add manager
+        </a>
     </section>
     {% empty %}
     <div class="rounded-xl bg-amber-50 p-6 text-sm text-amber-800 shadow">
@@ -97,8 +101,10 @@
 </section>
 {% endif %}
 
-<section class="mt-6 rounded-xl bg-white p-5 shadow">
-    <h2 class="text-base font-semibold text-slate-900">Add a worker</h2>
+<section id="add-worker" class="mt-6 rounded-xl bg-white p-5 shadow">
+    <h2 class="text-base font-semibold text-slate-900">
+        {% if selected_shop %}Add a worker to {{ selected_shop.name }}{% else %}Add a worker{% endif %}
+    </h2>
     <p class="mt-1 text-xs text-slate-500">They will be created as a manager for the selected shop.</p>
     <form method="post" class="mt-4">
         {% csrf_token %}

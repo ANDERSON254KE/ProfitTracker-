@@ -306,6 +306,36 @@ class WorkerProfileTests(BaseDataTestCase):
             self.client.get(reverse("manager_dashboard")).status_code, 200
         )
 
+    def test_add_buttons_open_form_with_the_card_shop_selected(self):
+        self.client.force_login(self.owner)
+        dashboard = self.client.get(reverse("owner_dashboard"))
+        self.assertContains(
+            dashboard,
+            f"{reverse('worker_profiles')}?shop={self.fig_tree.pk}#add-worker",
+        )
+
+        profiles = self.client.get(
+            reverse("worker_profiles"), {"shop": self.fig_tree.pk}
+        )
+        self.assertEqual(profiles.context["selected_shop"], self.fig_tree)
+        self.assertEqual(
+            profiles.context["form"].initial["assigned_shop"], self.fig_tree.pk
+        )
+        self.assertContains(profiles, "Add a worker to Fig Tree")
+        self.assertContains(profiles, 'id="add-worker"')
+
+    def test_worker_is_added_to_the_selected_shop(self):
+        self.client.force_login(self.owner)
+        response = self.client.post(
+            f"{reverse('worker_profiles')}?shop={self.empire.pk}",
+            self.payload(username="smallcity", assigned_shop=self.empire.pk),
+        )
+        self.assertRedirects(response, reverse("worker_profiles"))
+
+        worker = CustomUser.objects.get(username="smallcity")
+        self.assertEqual(worker.assigned_shop, self.empire)
+        self.assertTrue(worker.is_active)
+
     def test_identity_and_emergency_details_are_saved_and_visible(self):
         self.client.force_login(self.owner)
         response = self.client.post(reverse("worker_profiles"), self.payload())
